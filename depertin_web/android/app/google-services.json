@@ -1,0 +1,124 @@
+{
+  "project_info": {
+    "project_number": "939151024179",
+    "project_id": "depertin-f940f",
+    "storage_bucket": "depertin-f940f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:2e0df453387994abd3c346",
+        "android_client_info": {
+          "package_name": "com.example.cliente_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:452e0377da80e47bd3c346",
+        "android_client_info": {
+          "package_name": "com.example.depertin_cliente"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:42daf483146f3984d3c346",
+        "android_client_info": {
+          "package_name": "com.example.depertin_entregador"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:ef5ffde7a6a2fc02d3c346",
+        "android_client_info": {
+          "package_name": "com.example.depertin_lojista"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:53eb2f951a1a4f5cd3c346",
+        "android_client_info": {
+          "package_name": "com.example.depertin_web"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:6628f472ab142d0cd3c346",
+        "android_client_info": {
+          "package_name": "com.example.lojista_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

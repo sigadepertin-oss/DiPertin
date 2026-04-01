@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "939151024179",
+    "project_id": "depertin-f940f",
+    "storage_bucket": "depertin-f940f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939151024179:android:452e0377da80e47bd3c346",
+        "android_client_info": {
+          "package_name": "com.example.depertin_cliente"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "939151024179-sqi572b7mtr07ckt41roggtqmbhevred.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.depertin_cliente",
+            "certificate_hash": "6e50c2247b868406d27b9ccb0e1d899a08d4855c"
+          }
+        },
+        {
+          "client_id": "939151024179-1aibtpudtpmvtki6g6du878i0j2012mj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoi6_SF_oisaTPq4EJ7KUTRxlje1Sxg58"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "939151024179-1aibtpudtpmvtki6g6du878i0j2012mj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "939151024179-22snja8ca4920uiejsgc1eohbqd1n3p6.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.depertinWeb"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

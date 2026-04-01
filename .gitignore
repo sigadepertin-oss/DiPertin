@@ -1,0 +1,32 @@
+# Flutter / Dart (monorepo)
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/build/
+**/coverage/
+**/doc/api/
+.pub-cache/
+.pub/
+
+# Android
+**/android/.gradle/
+**/android/local.properties
+**/android/**/captures/
+
+# iOS
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/ephemeral/
+
+# Cloud Functions
+**/node_modules/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Logs e temp
+*.log
+**/firebase-debug.log
+.DS_Store

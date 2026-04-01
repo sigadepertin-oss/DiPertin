@@ -1,0 +1,72 @@
+---
+description: Contexto completo do projeto DiPertin - marketplace/delivery local com Flutter + Firebase
+alwaysApply: true
+---
+
+# Projeto DiPertin
+
+## Visão Geral
+
+**DiPertin (DePertin)** é uma plataforma de marketplace / delivery local com três papéis de utilizador: **cliente**, **lojista** e **entregador**. O backend é **100% Firebase** (Firestore, Auth, Storage, FCM, Cloud Functions). Pagamentos integrados com **Mercado Pago**.
+
+## Estrutura do Repositório
+
+```
+c:\Projeto\DiPertin\
+  depertin_cliente\     # App Flutter mobile (Android/iOS) — cliente, lojista, entregador
+  depertin_web\         # App Flutter admin (web + desktop) — painel administrativo
+```
+
+## Tecnologias
+
+- **Flutter** (Dart SDK ^3.11) com **Provider** para estado
+- **Firebase**: Firestore, Auth, Storage, Messaging (FCM)
+- **Cloud Functions**: Node.js 20, `firebase-functions` v7, `firebase-admin` v13
+- **Mercado Pago**: integração HTTP direta no cliente
+- **Projeto Firebase**: `depertin-f940f`
+
+## App Cliente (`depertin_cliente/lib/`)
+
+- `main.dart` — entrada, inicializa Firebase e FCM
+- `models/` — `user_model.dart`, `cart_item_model.dart`, `product_model.dart`, `banner_model.dart`
+- `providers/` — `cart_provider.dart` (carrinho com SharedPreferences)
+- `screens/auth/` — login, registo
+- `screens/cliente/` — vitrine, carrinho, checkout, pedidos, chat, endereços, perfil de loja
+- `screens/lojista/` — dashboard, pedidos, produtos, configurações, avaliações
+- `screens/entregador/` — dashboard, mapa, carteira, histórico, formulário
+- `screens/comum/` — perfil, edição de perfil
+- `screens/utilidades/` — vagas, achados, eventos
+
+## App Admin (`depertin_web/lib/`)
+
+- `main.dart` — rotas: `/login`, `/dashboard`, `/lojas`, `/entregadores`, `/banners`, `/financeiro`, `/configuracoes`, `/cidades`, `/utilidades`, `/atendimento_suporte`
+- `screens/` — ecrãs correspondentes a cada rota
+- `widgets/` — `sidebar_menu.dart`, `botao_suporte_flutuante.dart`
+
+## Cloud Functions (`depertin_cliente/functions/`)
+
+- `index.js` — duas funções Firestore trigger:
+  - `notificarNovoPedido`: onCreate em `pedidos/{pedidoId}` → FCM ao lojista
+  - `notificarEntregadoresPedidoPronto`: onUpdate em `pedidos/{pedidoId}` → FCM aos entregadores
+
+## Coleções Firestore Principais
+
+- `users` — perfis (nome, email, cpf, role, status, endereco, fcm_token, saldo, cidade)
+- `pedidos` — pedidos com itens, totais, status, subcoleção `mensagens`
+- `produtos`, `categorias`, `sugestoes_categorias`
+- `banners`, `avaliacoes`
+- `gateways_pagamento`, `planos_taxas`, `tabela_fretes`
+- `vagas`, `achados`, `eventos`
+- `suporte` com subcoleção `mensagens`
+- `saques_solicitacoes`, `receitas_app`, `telefones_premium`, `servicos_destaque`
+
+## Dependências Principais (Cliente)
+
+`firebase_core`, `cloud_firestore`, `firebase_auth`, `firebase_storage`, `firebase_messaging`, `provider`, `http`, `geolocator`, `geocoding`, `url_launcher`, `google_sign_in`, `image_picker`, `shared_preferences`, `audioplayers`, `intl`, `cached_network_image`
+
+## Convenções
+
+- Código e nomes em **português** (variáveis, coleções, rotas)
+- Sem testes automatizados significativos
+- Sem API REST própria — tudo via Firestore direto
+- Responder sempre em **português**
