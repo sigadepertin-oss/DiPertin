@@ -5,8 +5,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 // Biblioteca necessária para abrir PDFs em nova aba
 import 'package:url_launcher/url_launcher.dart';
-import '../widgets/sidebar_menu.dart';
-
 class LojasScreen extends StatefulWidget {
   const LojasScreen({super.key});
 
@@ -803,64 +801,57 @@ class _LojasScreenState extends State<LojasScreen> {
       length: 3,
       child: Scaffold(
         backgroundColor: Colors.grey[100],
-        body: Row(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SidebarMenu(rotaAtual: '/lojas'),
-            Expanded(
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.only(
+                top: 30,
+                left: 30,
+                right: 30,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.only(
-                      top: 30,
-                      left: 30,
-                      right: 30,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Gestão de Lojas",
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: diPertinRoxo,
-                          ),
-                        ),
-                        const Text(
-                          "Aprove parceiros e defina os planos de comissão de cada um.",
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                        const SizedBox(height: 20),
-                        TabBar(
-                          labelColor: diPertinRoxo,
-                          unselectedLabelColor: Colors.grey,
-                          indicatorColor: diPertinLaranja,
-                          tabs: const [
-                            Tab(
-                              icon: Icon(Icons.hourglass_empty),
-                              text: "Pendentes",
-                            ),
-                            Tab(
-                              icon: Icon(Icons.check_circle_outline),
-                              text: "Aprovadas",
-                            ),
-                            Tab(icon: Icon(Icons.block), text: "Bloqueadas"),
-                          ],
-                        ),
-                      ],
+                  Text(
+                    "Gestão de Lojas",
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: diPertinRoxo,
                     ),
                   ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _buildListaLojas('pendente'),
-                        _buildListaLojas('aprovada'),
-                        _buildListaLojas('bloqueada'),
-                      ],
-                    ),
+                  const Text(
+                    "Aprove parceiros e defina os planos de comissão de cada um.",
+                    style: TextStyle(color: Colors.grey, fontSize: 16),
                   ),
+                  const SizedBox(height: 20),
+                  TabBar(
+                    labelColor: diPertinRoxo,
+                    unselectedLabelColor: Colors.grey,
+                    indicatorColor: diPertinLaranja,
+                    tabs: const [
+                      Tab(
+                        icon: Icon(Icons.hourglass_empty),
+                        text: "Pendentes",
+                      ),
+                      Tab(
+                        icon: Icon(Icons.check_circle_outline),
+                        text: "Aprovadas",
+                      ),
+                      Tab(icon: Icon(Icons.block), text: "Bloqueadas"),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildListaLojas('pendente'),
+                  _buildListaLojas('aprovada'),
+                  _buildListaLojas('bloqueada'),
                 ],
               ),
             ),

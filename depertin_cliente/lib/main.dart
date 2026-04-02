@@ -1,7 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:depertin_cliente/screens/cliente/chat_suporte_screen.dart';
 import 'package:depertin_cliente/screens/lojista/lojista_pedidos_screen.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -26,14 +31,50 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+/// App Check antes de qualquer uso de Auth, Firestore, Storage, Functions, FCM, etc.
+/// Debug: providers de debug (emulador/CI). Release: Play Integrity (Android) e
+/// App Attest com fallback Device Check (iOS).
+Future<void> _ativarFirebaseAppCheck() async {
+  await FirebaseAppCheck.instance.activate(
+    providerAndroid: kDebugMode
+        ? const AndroidDebugProvider()
+        : const AndroidPlayIntegrityProvider(),
+    providerApple: kDebugMode
+        ? const AppleDebugProvider()
+        : const AppleAppAttestWithDeviceCheckFallbackProvider(),
+  );
+}
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _ativarFirebaseAppCheck();
+}
+
+/// Android: esconde a barra de navegação (voltar/home/recentes). O usuário pode
+/// deslizar de baixo para cima para exibi-la por um instante.
+Future<void> configurarBarraNavegacaoAndroidOculta() async {
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+  await SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.manual,
+    overlays: [SystemUiOverlay.top],
+  );
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ),
+  );
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await configurarBarraNavegacaoAndroidOculta();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _ativarFirebaseAppCheck();
 
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
@@ -45,6 +86,35 @@ void main() async {
 
   await flutterLocalNotificationsPlugin.initialize(
     settings: initializationSettings,
+    onDidReceiveNotificationResponse: (NotificationResponse response) {
+      final p = response.payload;
+      if (p == null || p.isEmpty) return;
+      try {
+        final map = jsonDecode(p) as Map<String, dynamic>;
+        final tipo = map['tipoNotificacao']?.toString() ?? '';
+        if (tipo == 'suporte_inicio' ||
+            tipo == 'suporte_mensagem' ||
+            tipo == 'suporte_encerrado' ||
+            tipo == 'atendimento_iniciado') {
+          navigatorKey.currentState?.pushNamed('/suporte');
+        } else if (tipo == 'nova_entrega') {
+          navigatorKey.currentState?.pushNamed('/entregador');
+        }
+      } catch (_) {}
+    },
+  );
+
+  final androidNotifPlugin = flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+  await androidNotifPlugin?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'high_importance_channel',
+      'Alertas DiPertin',
+      description: 'Pedidos, entregas e central de ajuda',
+      importance: Importance.high,
+      playSound: true,
+    ),
   );
 
   runApp(
@@ -59,8 +129,32 @@ void main() async {
   );
 }
 
-class DiPertinApp extends StatelessWidget {
+class DiPertinApp extends StatefulWidget {
   const DiPertinApp({super.key});
+
+  @override
+  State<DiPertinApp> createState() => _DiPertinAppState();
+}
+
+class _DiPertinAppState extends State<DiPertinApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      configurarBarraNavegacaoAndroidOculta();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,6 +176,7 @@ class DiPertinApp extends StatelessWidget {
         '/pedidos': (context) => const LojistaPedidosScreen(),
         '/home': (context) => const MainNavigator(),
         '/entregador': (context) => const EntregadorDashboardScreen(),
+        '/suporte': (context) => const ChatSuporteScreen(),
       },
     );
   }
@@ -178,6 +273,11 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (tipoDaNotificacao == 'nova_entrega') {
         Navigator.pushReplacementNamed(context, '/entregador');
+      } else if (tipoDaNotificacao == 'suporte_inicio' ||
+          tipoDaNotificacao == 'suporte_mensagem' ||
+          tipoDaNotificacao == 'suporte_encerrado' ||
+          tipoDaNotificacao == 'atendimento_iniciado') {
+        Navigator.pushReplacementNamed(context, '/suporte');
       } else {
         Navigator.pushReplacementNamed(context, '/pedidos');
       }
@@ -219,21 +319,26 @@ class _SplashScreenState extends State<SplashScreen> {
     String? token = await messaging.getToken();
     User? user = FirebaseAuth.instance.currentUser;
 
-    if (user != null && token != null) {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? tokenSalvo = prefs.getString('fcm_token');
-      String? usuarioSalvo = prefs.getString('fcm_uid');
-
-      if (tokenSalvo != token || usuarioSalvo != user.uid) {
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'fcm_token': token,
-          'ultimo_acesso': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
-        await prefs.setString('fcm_token', token);
-        await prefs.setString('fcm_uid', user.uid);
-      }
+    Future<void> persistirTokenFirestore(String? novoToken) async {
+      final u = FirebaseAuth.instance.currentUser;
+      if (u == null || novoToken == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      final tokenSalvo = prefs.getString('fcm_token');
+      final usuarioSalvo = prefs.getString('fcm_uid');
+      if (tokenSalvo == novoToken && usuarioSalvo == u.uid) return;
+      await FirebaseFirestore.instance.collection('users').doc(u.uid).set({
+        'fcm_token': novoToken,
+        'ultimo_acesso': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await prefs.setString('fcm_token', novoToken);
+      await prefs.setString('fcm_uid', u.uid);
     }
+
+    if (user != null && token != null) {
+      await persistirTokenFirestore(token);
+    }
+
+    FirebaseMessaging.instance.onTokenRefresh.listen(persistirTokenFirestore);
 
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       RemoteNotification? notification = message.notification;
@@ -242,15 +347,17 @@ class _SplashScreenState extends State<SplashScreen> {
           id: notification.hashCode,
           title: notification.title,
           body: notification.body,
-          notificationDetails: const NotificationDetails(
+          notificationDetails: NotificationDetails(
             android: AndroidNotificationDetails(
               'high_importance_channel',
-              'Alertas de Pedidos',
+              'Alertas DiPertin',
+              channelDescription: 'Pedidos, entregas e central de ajuda',
               importance: Importance.max,
               priority: Priority.high,
               icon: '@mipmap/ic_launcher',
             ),
           ),
+          payload: jsonEncode(message.data),
         );
       }
     });
@@ -261,6 +368,11 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (tipoDaNotificacao == 'nova_entrega') {
         navigatorKey.currentState?.pushNamed('/entregador');
+      } else if (tipoDaNotificacao == 'suporte_inicio' ||
+          tipoDaNotificacao == 'suporte_mensagem' ||
+          tipoDaNotificacao == 'suporte_encerrado' ||
+          tipoDaNotificacao == 'atendimento_iniciado') {
+        navigatorKey.currentState?.pushNamed('/suporte');
       } else {
         navigatorKey.currentState?.pushNamed('/pedidos');
       }

@@ -1,8 +1,6 @@
 import 'package:depertin_web/widgets/botao_suporte_flutuante.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../widgets/sidebar_menu.dart';
-
 class FinanceiroScreen extends StatefulWidget {
   const FinanceiroScreen({super.key});
 
@@ -328,12 +326,7 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[100],
-      body: Row(
-        children: [
-          const SidebarMenu(rotaAtual: '/financeiro'),
-
-          Expanded(
-            child: FutureBuilder<Map<String, dynamic>>(
+      body: FutureBuilder<Map<String, dynamic>>(
               future: _buscarDadosFinanceiros(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -631,9 +624,6 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
                 );
               },
             ),
-          ),
-        ],
-      ),
       floatingActionButton: const BotaoSuporteFlutuante(),
     );
   }

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../auth/google_auth_helper.dart';
 import '../../services/conta_exclusao_service.dart';
 import '../../services/location_service.dart';
+import 'recuperar_senha_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -133,6 +134,7 @@ class _LoginScreenState extends State<LoginScreen> {
             'tipoUsuario': 'cliente',
             'ativo': true,
             'status_conta': 'ativa',
+            'cpf_alteracao_bloqueada': false,
             'dataCadastro': FieldValue.serverTimestamp(),
             'totalConcluido': 0,
           });
@@ -142,7 +144,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Conta Google OK, mas falhou ao salvar o perfil: $e',
+                  'Conta Google conectada, mas não foi possível salvar o perfil: $e',
                 ),
                 backgroundColor: Colors.orange,
               ),
@@ -235,7 +237,29 @@ class _LoginScreenState extends State<LoginScreen> {
                   prefixIcon: Icon(Icons.lock),
                 ),
               ),
-              const SizedBox(height: 25),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _isLoading
+                      ? null
+                      : () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const RecuperarSenhaScreen(),
+                            ),
+                          );
+                        },
+                  child: const Text(
+                    'Esqueci minha senha',
+                    style: TextStyle(
+                      color: Color(0xFF6A1B9A),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
 
               ElevatedButton(
                 style: ElevatedButton.styleFrom(

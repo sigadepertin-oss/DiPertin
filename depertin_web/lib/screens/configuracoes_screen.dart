@@ -1,7 +1,6 @@
 import 'package:depertin_web/widgets/botao_suporte_flutuante.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../widgets/sidebar_menu.dart';
 // import 'package:http/http.dart' as http;
 // import 'dart:convert';
 
@@ -849,34 +848,29 @@ class _ConfiguracoesScreenState extends State<ConfiguracoesScreen> {
       length: 4, // <--- Agora são 4 abas!
       child: Scaffold(
         backgroundColor: Colors.grey[100],
-        body: Row(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SidebarMenu(rotaAtual: '/configuracoes'),
-
-            Expanded(
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.only(
+                top: 30,
+                left: 30,
+                right: 30,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.only(
-                      top: 30,
-                      left: 30,
-                      right: 30,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "Configurações Financeiras",
-                                  style: TextStyle(
-                                    fontSize: 28,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Configurações Financeiras",
+                            style: TextStyle(
+                              fontSize: 28,
                                     fontWeight: FontWeight.bold,
                                     color: diPertinRoxo,
                                   ),
@@ -963,9 +957,6 @@ class _ConfiguracoesScreenState extends State<ConfiguracoesScreen> {
                       ],
                     ),
                   ),
-                ],
-              ),
-            ),
           ],
         ),
         floatingActionButton: const BotaoSuporteFlutuante(),

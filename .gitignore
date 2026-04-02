@@ -25,6 +25,8 @@ criar_repo_e_push.ps1
 
 # Cloud Functions
 **/node_modules/
+**/functions/.env
+**/functions/.env.*
 
 # IDE
 .idea/

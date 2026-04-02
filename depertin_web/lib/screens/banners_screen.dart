@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
-import '../widgets/sidebar_menu.dart';
-
 class BannersScreen extends StatefulWidget {
   const BannersScreen({super.key});
 
@@ -426,37 +424,33 @@ class _BannersScreenState extends State<BannersScreen> {
           ),
         ],
       ),
-      body: Row(
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SidebarMenu(rotaAtual: '/banners'),
-          Expanded(
+          Container(
+            width: double.infinity,
+            color: Colors.white,
+            padding: const EdgeInsets.all(30),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: double.infinity,
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(30),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Vitrine Publicitária",
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: diPertinRoxo,
-                        ),
-                      ),
-                      const Text(
-                        "Clique em um banner para editar valores, agendamentos e datas.",
-                        style: TextStyle(color: Colors.grey, fontSize: 16),
-                      ),
-                    ],
+                Text(
+                  "Vitrine Publicitária",
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: diPertinRoxo,
                   ),
                 ),
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
+                const Text(
+                  "Clique em um banner para editar valores, agendamentos e datas.",
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('banners')
                         .orderBy('data_criacao', descending: true)
@@ -598,12 +592,9 @@ class _BannersScreenState extends State<BannersScreen> {
                       );
                     },
                   ),
-                ),
-              ],
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
     );
   }
 }

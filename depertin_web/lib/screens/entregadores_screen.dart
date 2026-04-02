@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../widgets/sidebar_menu.dart';
-
 class EntregadoresScreen extends StatefulWidget {
   const EntregadoresScreen({super.key});
 
@@ -868,64 +866,57 @@ class _EntregadoresScreenState extends State<EntregadoresScreen> {
       length: 3,
       child: Scaffold(
         backgroundColor: Colors.grey[100],
-        body: Row(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SidebarMenu(rotaAtual: '/entregadores'),
-            Expanded(
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.only(
+                top: 30,
+                left: 30,
+                right: 30,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.only(
-                      top: 30,
-                      left: 30,
-                      right: 30,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Gestão de Entregadores",
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: diPertinRoxo,
-                          ),
-                        ),
-                        const Text(
-                          "Aprove motoboys e defina os planos de comissão deles.",
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                        const SizedBox(height: 20),
-                        TabBar(
-                          labelColor: diPertinRoxo,
-                          unselectedLabelColor: Colors.grey,
-                          indicatorColor: diPertinLaranja,
-                          tabs: const [
-                            Tab(
-                              icon: Icon(Icons.hourglass_empty),
-                              text: "Pendentes",
-                            ),
-                            Tab(
-                              icon: Icon(Icons.check_circle_outline),
-                              text: "Aprovados",
-                            ),
-                            Tab(icon: Icon(Icons.block), text: "Bloqueados"),
-                          ],
-                        ),
-                      ],
+                  Text(
+                    "Gestão de Entregadores",
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: diPertinRoxo,
                     ),
                   ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _buildListaEntregadores('pendente'),
-                        _buildListaEntregadores('aprovado'),
-                        _buildListaEntregadores('bloqueado'),
-                      ],
-                    ),
+                  const Text(
+                    "Aprove motoboys e defina os planos de comissão deles.",
+                    style: TextStyle(color: Colors.grey, fontSize: 16),
                   ),
+                  const SizedBox(height: 20),
+                  TabBar(
+                    labelColor: diPertinRoxo,
+                    unselectedLabelColor: Colors.grey,
+                    indicatorColor: diPertinLaranja,
+                    tabs: const [
+                      Tab(
+                        icon: Icon(Icons.hourglass_empty),
+                        text: "Pendentes",
+                      ),
+                      Tab(
+                        icon: Icon(Icons.check_circle_outline),
+                        text: "Aprovados",
+                      ),
+                      Tab(icon: Icon(Icons.block), text: "Bloqueados"),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildListaEntregadores('pendente'),
+                  _buildListaEntregadores('aprovado'),
+                  _buildListaEntregadores('bloqueado'),
                 ],
               ),
             ),

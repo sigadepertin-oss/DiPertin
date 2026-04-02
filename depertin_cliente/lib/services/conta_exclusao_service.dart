@@ -74,7 +74,7 @@ class ContaExclusaoService {
 
     if (map.containsKey('error')) {
       final err = map['error'];
-      var msg = 'Não foi possível concluir o pedido.';
+      var msg = 'Não foi possível concluir a solicitação.';
       if (err is Map && err['message'] != null) {
         msg = err['message'].toString();
       }

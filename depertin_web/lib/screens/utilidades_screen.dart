@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
-import '../widgets/sidebar_menu.dart';
 import 'dart:typed_data';
 
 class UtilidadesScreen extends StatefulWidget {
@@ -866,35 +865,29 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
           ],
         ),
 
-        body: Row(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SidebarMenu(rotaAtual: '/utilidades'),
-
-            // CONTEÚDO COM AS ABAS
-            Expanded(
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.only(
+                top: 30,
+                left: 30,
+                right: 30,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.only(
-                      top: 30,
-                      left: 30,
-                      right: 30,
+                  Text(
+                    "Anúncios & Utilidade Pública",
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: diPertinRoxo,
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Anúncios & Utilidade Pública",
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: diPertinRoxo,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TabBar(
+                  ),
+                  const SizedBox(height: 20),
+                  TabBar(
                           labelColor: diPertinRoxo,
                           unselectedLabelColor: Colors.grey,
                           indicatorColor: diPertinLaranja,
@@ -910,12 +903,13 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                             Tab(icon: Icon(Icons.search_off), text: "Achados"),
                           ],
                         ),
-                      ],
-                    ),
-                  ),
 
-                  Expanded(
-                    child: TabBarView(
+                ],
+              ),
+            ),
+
+            Expanded(
+              child: TabBarView(
                       children: [
                         _buildListaGenerica(
                           colecao: 'servicos_destaque',
@@ -1001,9 +995,6 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                       ],
                     ),
                   ),
-                ],
-              ),
-            ),
           ],
         ),
       ),

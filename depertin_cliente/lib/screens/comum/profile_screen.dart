@@ -1,5 +1,6 @@
 // Arquivo: lib/screens/comum/profile_screen.dart
 
+import 'package:depertin_cliente/utils/cpf_perfil_usuario.dart';
 import 'package:depertin_cliente/screens/cliente/chat_suporte_screen.dart';
 import 'package:depertin_cliente/screens/comum/conta_exclusao_flow.dart';
 import 'package:depertin_cliente/screens/comum/edit_profile_screen.dart';
@@ -147,7 +148,8 @@ class ProfileScreen extends StatelessWidget {
   ) {
     String nome = userData['nome'] ?? 'Sem Nome';
     String role = userData['role'] ?? 'cliente';
-    String cpf = userData['cpf'] ?? 'Sem CPF';
+    final bool cpfBloqueado = CpfPerfilUsuario.edicaoBloqueada(userData);
+    final String cpfLegenda = CpfPerfilUsuario.textoListaPerfil(userData);
     String enderecoPadrao = userData['endereco_padrao'] ?? '';
     String nomeLoja = userData['loja_nome'] ?? '';
     String fotoPerfil = userData['foto_perfil'] ?? '';
@@ -163,23 +165,42 @@ class ProfileScreen extends StatelessWidget {
         children: [
           // CABEÇALHO DO PERFIL COM FOTO
           Center(
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-              ),
-              child: CircleAvatar(
-                radius: 55,
-                backgroundColor: diPertinRoxo.withOpacity(0.1),
-                backgroundImage: fotoPerfil.isNotEmpty
-                    ? NetworkImage(fotoPerfil)
-                    : null,
-                child: fotoPerfil.isEmpty
-                    ? const Icon(Icons.person, size: 60, color: diPertinRoxo)
-                    : null,
-              ),
-            ),
+            child: fotoPerfil.isNotEmpty
+                ? Tooltip(
+                    message: 'Toque para ampliar',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () =>
+                            _mostrarFotoPerfilAmpliada(context, fotoPerfil),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                          child: CircleAvatar(
+                            radius: 55,
+                            backgroundColor: diPertinRoxo.withOpacity(0.1),
+                            backgroundImage: NetworkImage(fotoPerfil),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                : Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: CircleAvatar(
+                      radius: 55,
+                      backgroundColor: diPertinRoxo.withOpacity(0.1),
+                      child: const Icon(Icons.person, size: 60, color: diPertinRoxo),
+                    ),
+                  ),
           ),
           const SizedBox(height: 15),
           Center(
@@ -262,7 +283,7 @@ class ProfileScreen extends StatelessWidget {
                 saldo = (d['saldo'] ?? 0.0).toDouble();
               }
 
-              // Só mostra o Card se o cliente tiver dinheiro guardado (estorno)
+              // Só mostra o Card se o cliente tiver dinheiro em estorno (saldo)
               if (saldo <= 0) return const SizedBox.shrink();
 
               return Container(
@@ -369,8 +390,25 @@ class ProfileScreen extends StatelessWidget {
                 icon: Icons.badge,
                 color: Colors.grey,
                 title: 'CPF',
-                subtitle: cpf,
-                trailing: const Icon(Icons.lock, size: 16, color: Colors.grey),
+                subtitle: cpfLegenda,
+                trailing: Icon(
+                  cpfBloqueado ? Icons.lock : Icons.edit_outlined,
+                  size: 16,
+                  color: Colors.grey,
+                ),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => EditProfileScreen(
+                        nomeAtual: nome,
+                        enderecoAtual: enderecoPadrao,
+                        role: role,
+                        nomeLojaAtual: nomeLoja,
+                      ),
+                    ),
+                  );
+                },
               ),
               const Divider(height: 1),
               _buildMenuItem(
@@ -562,6 +600,122 @@ class ProfileScreen extends StatelessWidget {
           const SizedBox(height: 20),
         ],
       ),
+    );
+  }
+
+  /// Foto de perfil em cartão compacto; pinça para ampliar detalhes.
+  void _mostrarFotoPerfilAmpliada(BuildContext context, String url) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (dialogContext) {
+        final w = MediaQuery.sizeOf(dialogContext).width;
+        final side = (w - 56).clamp(220.0, 288.0);
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Material(
+            color: Colors.white,
+            elevation: 12,
+            shadowColor: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: side),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 4, 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.photo_outlined,
+                          size: 20,
+                          color: diPertinRoxo.withValues(alpha: 0.9),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Foto do perfil',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.2,
+                              color: Color(0xFF1A1A1A),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          icon: Icon(
+                            Icons.close_rounded,
+                            color: Colors.grey.shade600,
+                            size: 22,
+                          ),
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
+                  ColoredBox(
+                    color: Colors.grey.shade50,
+                    child: SizedBox(
+                      width: side,
+                      height: side,
+                      child: InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 3.2,
+                        boundaryMargin: const EdgeInsets.all(20),
+                        child: Image.network(
+                          url,
+                          fit: BoxFit.contain,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Center(
+                              child: SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  color: diPertinRoxo.withValues(alpha: 0.85),
+                                ),
+                              ),
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return Icon(
+                              Icons.broken_image_outlined,
+                              color: Colors.grey.shade400,
+                              size: 48,
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+                    child: Text(
+                      'Use dois dedos para ampliar',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 

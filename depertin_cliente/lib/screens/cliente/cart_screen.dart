@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:math';
+import 'dart:math' show Random, max, min;
 import '../../providers/cart_provider.dart';
 import '../../models/cart_item_model.dart';
 
@@ -289,10 +289,22 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
+  static const double _alturaBarraCheckout = 56;
+  /// Padding vertical do `bottomSheet` (14 acima + 14 abaixo do botão).
+  static const double _paddingVerticalFaixaCheckout = 28;
+  /// Espaço extra entre o card do total e a faixa laranja ao rolar até o fim.
+  static const double _folgaEntreConteudoEBarra = 36;
+
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<CartProvider>();
     bool carrinhoVazio = cart.items.isEmpty;
+    final mq = MediaQuery.of(context);
+    final bottomPad = max(mq.padding.bottom, mq.viewPadding.bottom);
+    final scrollBottomPad = _folgaEntreConteudoEBarra +
+        _paddingVerticalFaixaCheckout +
+        _alturaBarraCheckout +
+        bottomPad;
 
     double subtotal = cart.totalAmount;
     double totalParcial = subtotal + _taxaEntregaReal;
@@ -300,7 +312,7 @@ class _CartScreenState extends State<CartScreen> {
     double totalFinal = totalParcial - valorDesconto;
 
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: const Color(0xFFF3F4F6),
       appBar: AppBar(
         title: const Text(
           "Meu Carrinho",
@@ -339,15 +351,22 @@ class _CartScreenState extends State<CartScreen> {
               ),
             )
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.fromLTRB(20, 20, 20, scrollBottomPad),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: diPertinRoxo.withOpacity(0.3)),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.06),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                      border: Border.all(color: diPertinRoxo.withOpacity(0.12)),
                     ),
                     child: Row(
                       children: [
@@ -426,23 +445,31 @@ class _CartScreenState extends State<CartScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 25),
+                  const SizedBox(height: 28),
 
-                  const Text(
-                    "Itens do Pedido",
+                  Text(
+                    "Itens do pedido",
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.grey[900],
+                      letterSpacing: -0.3,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
 
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: Colors.grey[200]!),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                      border: Border.all(color: Colors.grey.shade200),
                     ),
                     child: ListView.separated(
                       shrinkWrap: true,
@@ -555,50 +582,160 @@ class _CartScreenState extends State<CartScreen> {
                       },
                     ),
                   ),
-                  const SizedBox(height: 25),
+                  const SizedBox(height: 28),
 
                   if (!_retirarNaLoja) ...[
-                    const Text(
+                    Text(
                       "Onde devemos entregar?",
                       style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey[900],
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _enderecoController,
-                      decoration: InputDecoration(
-                        hintText: "Rua, Número, Bairro, Complemento",
-                        prefixIcon: const Icon(
-                          Icons.location_on,
-                          color: diPertinLaranja,
-                        ),
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(15),
-                          borderSide: BorderSide.none,
-                        ),
+                    const SizedBox(height: 12),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
-                      maxLines: 2,
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8.0, left: 5),
-                      child: Text(
-                        "* Se você alterar este endereço, salvaremos apenas para a próxima compra. Para mudar o padrão, use a tela inicial.",
-                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: diPertinLaranja.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.location_on_rounded,
+                                  color: diPertinLaranja,
+                                  size: 22,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Endereço completo',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                        color: Colors.grey[900],
+                                        letterSpacing: -0.2,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Inclua rua, número, bairro e cidade. '
+                                      'Ponto de referência ajuda na entrega.',
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        height: 1.35,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _enderecoController,
+                            keyboardType: TextInputType.streetAddress,
+                            textCapitalization: TextCapitalization.sentences,
+                            minLines: 2,
+                            maxLines: 4,
+                            style: TextStyle(
+                              fontSize: 15,
+                              height: 1.4,
+                              color: Colors.grey[900],
+                            ),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              alignLabelWithHint: true,
+                              hintText:
+                                  'Ex.: Rua das Flores, 120, Centro, Toledo — apto 302',
+                              hintStyle: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[400],
+                                height: 1.4,
+                              ),
+                              filled: true,
+                              fillColor: const Color(0xFFF8F9FA),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 14,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: Colors.grey.shade300),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: Colors.grey.shade300),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: diPertinRoxo,
+                                  width: 1.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.info_outline_rounded,
+                                size: 18,
+                                color: Colors.grey[500],
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Alterações aqui valem para este pedido. '
+                                  'Para definir o endereço padrão da conta, '
+                                  'use a tela inicial do app.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.35,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 25),
+                    const SizedBox(height: 28),
                   ],
 
                   if (_saldoCliente > 0) ...[
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.green[50],
-                        borderRadius: BorderRadius.circular(15),
+                        borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: Colors.green[200]!),
                       ),
                       child: CheckboxListTile(
@@ -618,23 +755,32 @@ class _CartScreenState extends State<CartScreen> {
                             setState(() => _usarSaldo = val ?? false),
                       ),
                     ),
-                    const SizedBox(height: 25),
+                    const SizedBox(height: 28),
                   ],
 
                   if (totalFinal > 0) ...[
-                    const Text(
+                    Text(
                       "Como quer pagar o restante?",
                       style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey[900],
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(15),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
                       child: Column(
                         children: [
@@ -668,15 +814,25 @@ class _CartScreenState extends State<CartScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 25),
+                    const SizedBox(height: 28),
                   ],
 
                   Container(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 18,
+                    ),
                     decoration: BoxDecoration(
-                      color: diPertinRoxo.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: diPertinRoxo.withOpacity(0.2)),
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: diPertinRoxo.withOpacity(0.08),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                      border: Border.all(color: diPertinRoxo.withOpacity(0.15)),
                     ),
                     child: Column(
                       children: [
@@ -735,7 +891,7 @@ class _CartScreenState extends State<CartScreen> {
                             ],
                           ),
                         ],
-                        const Divider(height: 30),
+                        Divider(height: 28, color: Colors.grey.shade200),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -760,48 +916,51 @@ class _CartScreenState extends State<CartScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 100),
                 ],
               ),
             ),
       bottomSheet: carrinhoVazio
           ? null
-          : Container(
-              padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 10,
-                    offset: Offset(0, -5),
-                  ),
-                ],
-              ),
-              child: SizedBox(
-                width: double.infinity,
-                height: 55,
-                child: ElevatedButton(
-                  // === AQUI ESTÁ A MUDANÇA: AGORA CHAMA A NOVA FUNÇÃO ===
-                  onPressed: _processandoPedido
-                      ? null
-                      : () => _avancarParaPagamento(cart),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: diPertinLaranja,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
+          : Material(
+              elevation: 12,
+              color: Colors.white,
+              shadowColor: Colors.black26,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 14, 20, 14 + bottomPad),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: _alturaBarraCheckout,
+                  child: ElevatedButton(
+                    onPressed: _processandoPedido
+                        ? null
+                        : () => _avancarParaPagamento(cart),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: diPertinLaranja,
+                      elevation: 0,
+                      shadowColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
-                  ),
-                  child: _processandoPedido
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
-                          "FINALIZAR PEDIDO",
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
+                    child: _processandoPedido
+                        ? const SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2.5,
+                            ),
+                          )
+                        : const Text(
+                            "FINALIZAR PEDIDO",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
+                  ),
                 ),
               ),
             ),

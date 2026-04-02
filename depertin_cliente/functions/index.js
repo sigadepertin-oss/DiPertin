@@ -1,4 +1,7 @@
 // Arquivo function/index.js
+// Carrega functions/.env (SMTP e pepper — não fazer commit do .env)
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
@@ -38,7 +41,7 @@ exports.notificarNovoPedido = functions.firestore
             const lojaData = lojaDoc.data();
             const token = lojaData.fcm_token;
 
-            // 2. Verifica se o lojista tem o telemóvel registado para receber avisos
+            // 2. Verifica se o lojista tem o celular registrado (FCM) para receber avisos
             if (!token) {
                 console.log("Aviso: O lojista não tem um fcm_token salvo.");
                 return null;
@@ -155,6 +158,170 @@ exports.notificarEntregadoresPedidoPronto = functions.firestore
     });
 
 // ==========================================
+// Central de ajuda — push FCM para o cliente (support_tickets)
+// Disparo automático: criação do chamado, mensagem do atendente (painel), encerramento pelo painel.
+// O nome do app no dispositivo (Android: android:label "DiPertin") aparece como remetente da notificação.
+// ==========================================
+
+const SUPORTE_FCM_ANDROID = {
+    priority: 'high',
+    notification: {
+        channelId: 'high_importance_channel',
+        sound: 'default',
+    },
+};
+
+function suporteTruncar(str, max) {
+    if (!str || typeof str !== 'string') return '';
+    const t = str.trim();
+    if (t.length <= max) return t;
+    return `${t.slice(0, max - 1)}…`;
+}
+
+async function suporteEnviarFcmParaUsuario(userId, payload) {
+    if (!userId) return;
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    if (!userDoc.exists) return;
+    const token = userDoc.data().fcm_token;
+    if (!token) {
+        console.log(`[suporte] Sem fcm_token para user=${userId}`);
+        return;
+    }
+    try {
+        await admin.messaging().send({ ...payload, token });
+        console.log(`[suporte] FCM enviado user=${userId}`);
+    } catch (e) {
+        console.error('[suporte] Erro FCM:', e);
+    }
+}
+
+/** Cliente abre novo chamado (botão Novo Atendimento). */
+exports.notificarSuporteTicketCriado = functions.firestore
+    .document('support_tickets/{ticketId}')
+    .onCreate(async (snap, context) => {
+        const d = snap.data();
+        const userId = d.user_id;
+        const ticketId = context.params.ticketId;
+        if (!userId) return null;
+
+        await suporteEnviarFcmParaUsuario(userId, {
+            notification: {
+                title: 'Novo atendimento iniciado',
+                body: 'Seu atendimento foi iniciado. Por favor, aguarde que um de nossos atendentes irá lhe atender.',
+            },
+            android: SUPORTE_FCM_ANDROID,
+            data: {
+                tipoNotificacao: 'suporte_inicio',
+                ticketId: String(ticketId),
+            },
+        });
+        return null;
+    });
+
+/** Atendente envia mensagem pelo painel web (sender_type === agent). */
+exports.notificarSuporteMensagemAgente = functions.firestore
+    .document('support_tickets/{ticketId}/mensagens/{msgId}')
+    .onCreate(async (snap, context) => {
+        const msg = snap.data();
+        if (msg.sender_type !== 'agent') return null;
+
+        const ticketId = context.params.ticketId;
+        const ticketSnap = await admin.firestore()
+            .collection('support_tickets')
+            .doc(ticketId)
+            .get();
+        if (!ticketSnap.exists) return null;
+        const userId = ticketSnap.data().user_id;
+        if (!userId) return null;
+
+        const textoOriginal = suporteTruncar(msg.mensagem || '', 400);
+        let nomeAtendente = 'Atendente';
+        const sid = msg.sender_id;
+        if (sid) {
+            const u = await admin.firestore().collection('users').doc(sid).get();
+            if (u.exists) {
+                const n = u.data().nome;
+                if (n && String(n).trim()) nomeAtendente = String(n).trim();
+            }
+        }
+
+        const corpo = suporteTruncar(`${nomeAtendente}: ${textoOriginal}`, 200);
+
+        await suporteEnviarFcmParaUsuario(userId, {
+            notification: {
+                title: 'Nova Mensagem',
+                body: corpo,
+            },
+            android: SUPORTE_FCM_ANDROID,
+            data: {
+                tipoNotificacao: 'suporte_mensagem',
+                ticketId: String(ticketId),
+            },
+        });
+        return null;
+    });
+
+/**
+ * Painel: botão "Iniciar Atendimento" (waiting → in_progress).
+ * Usa fcm_token do cliente em users/{user_id}.
+ */
+exports.notificarSuporteAtendimentoIniciadoPeloPainel = functions.firestore
+    .document('support_tickets/{ticketId}')
+    .onUpdate(async (change, context) => {
+        const antes = change.before.data();
+        const depois = change.after.data();
+        if (antes.status !== 'waiting' || depois.status !== 'in_progress') {
+            return null;
+        }
+
+        const userId = depois.user_id;
+        const ticketId = context.params.ticketId;
+        let nomeAtendente = (depois.agent_nome && String(depois.agent_nome).trim())
+            ? String(depois.agent_nome).trim()
+            : 'Atendente';
+        nomeAtendente = suporteTruncar(nomeAtendente, 80);
+
+        await suporteEnviarFcmParaUsuario(userId, {
+            notification: {
+                title: 'Atendimento iniciado',
+                body: `Seu atendimento foi iniciado por ${nomeAtendente}`,
+            },
+            android: SUPORTE_FCM_ANDROID,
+            data: {
+                tipo: 'atendimento_iniciado',
+                atendimento_id: String(ticketId),
+            },
+        });
+        return null;
+    });
+
+/** Atendente encerra pelo painel (status closed + closed_by support). */
+exports.notificarSuporteEncerradoPeloPainel = functions.firestore
+    .document('support_tickets/{ticketId}')
+    .onUpdate(async (change, context) => {
+        const antes = change.before.data();
+        const depois = change.after.data();
+        if (antes.status === 'closed' || depois.status !== 'closed') return null;
+        if (depois.closed_by !== 'support') return null;
+
+        const userId = depois.user_id;
+        const ticketId = context.params.ticketId;
+
+        await suporteEnviarFcmParaUsuario(userId, {
+            notification: {
+                title: 'Atendimento finalizado',
+                body: 'Seu atendimento foi finalizado.',
+            },
+            android: SUPORTE_FCM_ANDROID,
+            data: {
+                tipoNotificacao: 'suporte_encerrado',
+                ticketId: String(ticketId),
+            },
+        });
+        return null;
+    });
+
+// ==========================================
 // EXCLUSÃO DE CONTA — soft delete com retenção de 30 dias (servidor)
 // ==========================================
 exports.solicitarExclusaoConta = functions.https.onCall(async (data, context) => {
@@ -229,3 +396,10 @@ exports.marcarContasElegiveisExclusaoDefinitiva = functions.pubsub
         console.log(`[exclusao] Verificados: ${snap.size}. Marcados elegivel_exclusao_definitiva: ${atualizados}.`);
         return null;
     });
+
+// Recuperação de senha (OTP + SMTP) — ver functions/env.recuperacao.example
+const recuperacaoSenha = require("./recuperacao_senha");
+exports.recuperacaoSenhaSolicitar = recuperacaoSenha.recuperacaoSenhaSolicitar;
+exports.recuperacaoSenhaVerificarOtp = recuperacaoSenha.recuperacaoSenhaVerificarOtp;
+exports.recuperacaoSenhaDefinirNovaSenha = recuperacaoSenha.recuperacaoSenhaDefinirNovaSenha;
+exports.recuperacaoSenhaPosAlteracao = recuperacaoSenha.recuperacaoSenhaPosAlteracao;

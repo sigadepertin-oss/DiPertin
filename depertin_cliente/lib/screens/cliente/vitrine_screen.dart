@@ -1,9 +1,10 @@
 // Arquivo: lib/screens/cliente/vitrine_screen.dart
 
 import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../providers/cart_provider.dart';
@@ -23,6 +24,12 @@ class VitrineScreen extends StatefulWidget {
 }
 
 class _VitrineScreenState extends State<VitrineScreen> {
+  final NumberFormat _fmtMoeda = NumberFormat.currency(
+    locale: 'pt_BR',
+    symbol: r'R$',
+    decimalDigits: 2,
+  );
+
   String _donoProduto(Map<String, dynamic> p) {
     return (p['lojista_id'] ?? p['loja_id'] ?? '').toString();
   }
@@ -424,9 +431,9 @@ class _VitrineScreenState extends State<VitrineScreen> {
 
                                 itensDaVitrine.add(
                                   Padding(
-                                    padding: const EdgeInsets.only(bottom: 10),
+                                    padding: const EdgeInsets.only(bottom: 12),
                                     child: SizedBox(
-                                      height: 250,
+                                      height: 272,
                                       child: Row(
                                         children: [
                                           Expanded(
@@ -435,7 +442,7 @@ class _VitrineScreenState extends State<VitrineScreen> {
                                               prod1,
                                             ),
                                           ),
-                                          const SizedBox(width: 10),
+                                          const SizedBox(width: 12),
                                           Expanded(
                                             child: prod2 != null
                                                 ? _buildProductCard(
@@ -471,7 +478,7 @@ class _VitrineScreenState extends State<VitrineScreen> {
 
                               return ListView(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
+                                  horizontal: 12,
                                 ),
                                 children: itensDaVitrine,
                               );
@@ -503,221 +510,311 @@ class _VitrineScreenState extends State<VitrineScreen> {
         precoOferta != null && precoOriginal != null && precoOferta < precoOriginal;
     final double precoFinal =
         temOferta ? precoOferta : (precoOriginal ?? 0.0);
+    final bool lojaAberta = produto['loja_aberta'] != false;
 
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ProductDetailsScreen(produto: produto),
-          ),
-        );
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+    void abrirDetalhes() {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ProductDetailsScreen(produto: produto),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              flex: 3,
-              child: Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(12),
-                    ),
-                    child: imagemVitrine.isNotEmpty
-                        ? Image.network(
-                            imagemVitrine,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Container(
-                                color: Colors.grey[100],
-                                child: const Center(
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: diPertinLaranja,
-                                    ),
+      );
+    }
+
+    const radius = 16.0;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: abrirDetalhes,
+        borderRadius: BorderRadius.circular(radius),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: const Color(0xFFE8E6ED)),
+            boxShadow: [
+              BoxShadow(
+                color: diPertinRoxo.withValues(alpha: 0.07),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 58,
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(radius),
+                  ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (imagemVitrine.isNotEmpty)
+                        Image.network(
+                          imagemVitrine,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Container(
+                              color: const Color(0xFFF4F2F8),
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: diPertinLaranja,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                          errorBuilder: (c, e, s) => _placeholderImagemProduto(),
+                        )
+                      else
+                        _placeholderImagemProduto(),
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.black.withValues(alpha: 0.0),
+                                Colors.black.withValues(alpha: 0.06),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (!lojaAberta)
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.42),
+                            ),
+                          ),
+                        ),
+                      if (temOferta)
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.red.shade600,
+                                  Colors.red.shade700,
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.red.withValues(alpha: 0.35),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              '-${((1 - precoOferta / precoOriginal) * 100).round()}%',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (!lojaAberta)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.62),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'Fechada',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 42,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        produto['nome'] ?? 'Sem nome',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          height: 1.22,
+                          letterSpacing: -0.2,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Material(
+                        color: const Color(0xFFF3E5F5).withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(8),
+                        child: InkWell(
+                          onTap: () {
+                            final id = produto['lojista_id'] ?? produto['loja_id'];
+                            if (id != null && '$id'.isNotEmpty) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => LojaCatalogoScreen(
+                                    lojaId: '$id',
+                                    nomeLoja: produto['loja_nome_vitrine'] ??
+                                        'Loja parceira',
                                   ),
                                 ),
                               );
-                            },
-                            errorBuilder: (c, e, s) => Container(
-                              color: Colors.grey[100],
-                              child: const Icon(
-                                Icons.image_not_supported_outlined,
-                                size: 32,
-                                color: Colors.grey,
-                              ),
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 4,
                             ),
-                          )
-                        : Container(
-                            color: Colors.grey[100],
-                            child: const Icon(
-                              Icons.image_not_supported_outlined,
-                              size: 32,
-                              color: Colors.grey,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.storefront_rounded,
+                                  size: 13,
+                                  color: diPertinRoxo.withValues(alpha: 0.85),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    produto['loja_nome_vitrine'] ??
+                                        'Loja parceira',
+                                    style: TextStyle(
+                                      color: diPertinRoxo.withValues(alpha: 0.9),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                  ),
-                  if (temOferta)
-                    Positioned(
-                      top: 6,
-                      left: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red[600],
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          "-${((1 - precoOferta / precoOriginal) * 100).round()}%",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      produto["nome"] ?? "Sem nome",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: Colors.black87,
-                        height: 1.2,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 3),
-                    GestureDetector(
-                      onTap: () {
-                        if (produto['lojista_id'] != null) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => LojaCatalogoScreen(
-                                lojaId: produto['lojista_id'],
-                                nomeLoja:
-                                    produto["loja_nome_vitrine"] ??
-                                    "Loja Parceira",
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      child: Row(
+                      const Spacer(),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Icon(Icons.storefront, size: 11, color: Colors.grey[500]),
-                          const SizedBox(width: 3),
                           Expanded(
-                            child: Text(
-                              produto["loja_nome_vitrine"] ?? "Loja Parceira",
-                              style: TextStyle(
-                                color: Colors.grey[500],
-                                fontSize: 10,
-                                fontWeight: FontWeight.w500,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (temOferta)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 2),
+                                    child: Text(
+                                      _fmtMoeda.format(precoOriginal),
+                                      style: TextStyle(
+                                        color: Colors.grey.shade400,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                        decoration: TextDecoration.lineThrough,
+                                        decorationColor: Colors.grey.shade400,
+                                      ),
+                                    ),
+                                  ),
+                                Text(
+                                  _fmtMoeda.format(precoFinal),
+                                  style: const TextStyle(
+                                    color: diPertinLaranja,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Material(
+                            color: diPertinRoxo,
+                            elevation: 2,
+                            shadowColor: diPertinRoxo.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              onTap: abrirDetalhes,
+                              borderRadius: BorderRadius.circular(12),
+                              child: const SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: Icon(
+                                  Icons.add_shopping_cart_rounded,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    const Spacer(),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (temOferta)
-                                Text(
-                                  "R\$ ${precoOriginal.toStringAsFixed(2)}",
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontSize: 11,
-                                    decoration: TextDecoration.lineThrough,
-                                    decorationColor: Colors.grey[400],
-                                  ),
-                                ),
-                              Text(
-                                "R\$ ${precoFinal.toStringAsFixed(2)}",
-                                style: const TextStyle(
-                                  color: diPertinLaranja,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Material(
-                          color: diPertinRoxo,
-                          borderRadius: BorderRadius.circular(8),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(8),
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      ProductDetailsScreen(produto: produto),
-                                ),
-                              );
-                            },
-                            child: const Padding(
-                              padding: EdgeInsets.all(6),
-                              child: Icon(
-                                Icons.add_shopping_cart_rounded,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _placeholderImagemProduto() {
+    return Container(
+      color: const Color(0xFFF4F2F8),
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.shopping_bag_outlined,
+        size: 40,
+        color: Colors.grey.shade400,
       ),
     );
   }

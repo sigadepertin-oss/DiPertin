@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../widgets/sidebar_menu.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../navigation/painel_navigation_scope.dart';
+import '../theme/painel_admin_theme.dart';
 import '../widgets/botao_suporte_flutuante.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -11,8 +13,8 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final Color diPertinRoxo = const Color(0xFF6A1B9A);
-  final Color diPertinLaranja = const Color(0xFFFF8F00);
+  final Color diPertinRoxo = PainelAdminTheme.roxo;
+  final Color diPertinLaranja = PainelAdminTheme.laranja;
 
   // Variáveis Operacionais (Pendências)
   int _lojasPendentes = 0;
@@ -101,6 +103,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // === WIDGET: CARD DE PENDÊNCIA (Operacional) ===
   Widget _buildPendenciaCard(
+    BuildContext context,
     String title,
     int count,
     IconData icon,
@@ -108,46 +111,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String rota,
   ) {
     return Expanded(
-      child: InkWell(
-        onTap: () => Navigator.pushReplacementNamed(context, rota),
-        borderRadius: BorderRadius.circular(15),
-        child: Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => context.navegarPainel(rota),
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: PainelAdminTheme.sombraCardSuave(),
+              border: Border.all(color: color.withOpacity(0.12)),
+            ),
             child: Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: color.withOpacity(0.15),
-                  radius: 25,
-                  child: Icon(icon, color: color),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: color, size: 26),
                 ),
-                const SizedBox(width: 15),
+                const SizedBox(width: 18),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         title,
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontWeight: FontWeight.bold,
+                        style: GoogleFonts.plusJakartaSans(
+                          color: PainelAdminTheme.textoSecundario,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
                         ),
                       ),
+                      const SizedBox(height: 4),
                       Text(
                         count.toString(),
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
                           color: color,
+                          height: 1,
+                          letterSpacing: -0.5,
                         ),
                       ),
                     ],
                   ),
                 ),
+                Icon(Icons.arrow_forward_ios_rounded,
+                    size: 16, color: color.withOpacity(0.45)),
               ],
             ),
           ),
@@ -164,35 +179,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
         builder: (context, snapshot) {
           String total = snapshot.hasData
               ? snapshot.data!.docs.length.toString()
-              : "...";
-          return InkWell(
-            onTap: () => _dialogSelecionarCidade(titulo, tipo),
-            child: Card(
-              elevation: 4,
+              : '…';
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => _dialogSelecionarCidade(titulo, tipo),
+              borderRadius: BorderRadius.circular(16),
               child: Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
                 decoration: BoxDecoration(
-                  border: Border(top: BorderSide(color: cor, width: 5)),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: PainelAdminTheme.sombraCardSuave(),
+                  border: Border.all(color: const Color(0xFFE8E4F0)),
                 ),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      titulo,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      total,
-                      style: TextStyle(
-                        fontSize: 30,
+                    Container(
+                      height: 4,
+                      decoration: BoxDecoration(
                         color: cor,
-                        fontWeight: FontWeight.bold,
+                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    const Text(
-                      "Ver Ranking",
-                      style: TextStyle(fontSize: 10, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    Text(
+                      titulo,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: const Color(0xFF475569),
+                        height: 1.25,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      total,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 34,
+                        color: cor,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -1,
+                        height: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Text(
+                          'Ver ranking',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: PainelAdminTheme.roxo,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_outward_rounded,
+                          size: 14,
+                          color: PainelAdminTheme.roxo.withOpacity(0.8),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -451,49 +500,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
-      body: Row(
-        children: [
-          const SidebarMenu(rotaAtual: '/dashboard'),
-
-          Expanded(
-            child: _isLoading
-                ? Center(child: CircularProgressIndicator(color: diPertinRoxo))
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(40),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+      backgroundColor: PainelAdminTheme.fundoCanvas,
+      body: _isLoading
+          ? Center(
+              child: CircularProgressIndicator(
+                color: diPertinRoxo,
+                strokeWidth: 2.5,
+              ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(40, 40, 40, 100),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                         Text(
-                          "Painel SuperAdmin",
-                          style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: diPertinRoxo,
+                          'CENTRO DE COMANDO',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 2,
+                            color: PainelAdminTheme.textoSecundario,
                           ),
                         ),
-                        const Text(
-                          "Bem-vindo ao centro de comando do DiPertin.",
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Painel SuperAdmin',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF1E1B4B),
+                            letterSpacing: -0.8,
+                            height: 1.1,
+                          ),
                         ),
-                        const SizedBox(height: 30),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Bem-vindo ao centro de comando do DiPertin.',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 16,
+                            color: PainelAdminTheme.textoSecundario,
+                            height: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 36),
 
                         // === SEÇÃO 1: AVISOS E PENDÊNCIAS ===
                         if (_lojasPendentes > 0 ||
                             _entregadoresPendentes > 0) ...[
                           Container(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(22),
                             decoration: BoxDecoration(
-                              color: Colors.orange[50],
-                              borderRadius: BorderRadius.circular(15),
-                              border: Border.all(color: Colors.orange[200]!),
+                              gradient: LinearGradient(
+                                colors: [
+                                  const Color(0xFFFFF7ED),
+                                  const Color(0xFFFFEDD5),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: const Color(0xFFFDBA74).withOpacity(0.6),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: diPertinLaranja.withOpacity(0.08),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
                             ),
                             child: Row(
                               children: [
-                                const Icon(
-                                  Icons.warning_amber_rounded,
-                                  color: Colors.orange,
-                                  size: 40,
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.85),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(
+                                    Icons.notifications_active_rounded,
+                                    color: diPertinLaranja,
+                                    size: 32,
+                                  ),
                                 ),
                                 const SizedBox(width: 20),
                                 Expanded(
@@ -501,18 +588,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      const Text(
-                                        "Atenção Requerida!",
-                                        style: TextStyle(
-                                          color: Colors.orange,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 18,
+                                      Text(
+                                        'Atenção requerida',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          color: const Color(0xFFC2410C),
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 17,
                                         ),
                                       ),
+                                      const SizedBox(height: 6),
                                       Text(
-                                        "Existem aprovações pendentes aguardando sua análise para entrarem no aplicativo.",
-                                        style: TextStyle(
-                                          color: Colors.orange[800],
+                                        'Existem aprovações pendentes aguardando sua análise para entrarem no aplicativo.',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          color: const Color(0xFF9A3412),
+                                          fontSize: 14,
+                                          height: 1.45,
                                         ),
                                       ),
                                     ],
@@ -526,6 +616,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             children: [
                               if (_lojasPendentes > 0)
                                 _buildPendenciaCard(
+                                  context,
                                   "Lojas Pendentes",
                                   _lojasPendentes,
                                   Icons.store,
@@ -537,6 +628,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 const SizedBox(width: 20),
                               if (_entregadoresPendentes > 0)
                                 _buildPendenciaCard(
+                                  context,
                                   "Entregadores Pendentes",
                                   _entregadoresPendentes,
                                   Icons.motorcycle,
@@ -549,109 +641,162 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ],
 
                         // === SEÇÃO 2: RANKINGS E DESEMPENHO ===
-                        const Text(
-                          "Desempenho e Rankings",
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
+                        Text(
+                          'Desempenho e rankings',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF1E1B4B),
                           ),
                         ),
-                        const SizedBox(height: 15),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Visão consolidada de usuários por perfil.',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 13,
+                            color: PainelAdminTheme.textoSecundario,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _cardContadorRanking(
-                              "Total Usuários",
+                              'Total Usuários',
                               null,
-                              Colors.blue,
+                              const Color(0xFF3B82F6),
                             ),
-                            const SizedBox(width: 15),
+                            const SizedBox(width: 18),
                             _cardContadorRanking(
-                              "Clientes",
-                              "cliente",
-                              Colors.green,
+                              'Clientes',
+                              'cliente',
+                              const Color(0xFF10B981),
                             ),
-                            const SizedBox(width: 15),
+                            const SizedBox(width: 18),
                             _cardContadorRanking(
-                              "Lojistas",
-                              "lojista",
+                              'Lojistas',
+                              'lojista',
                               diPertinLaranja,
                             ),
-                            const SizedBox(width: 15),
+                            const SizedBox(width: 18),
                             _cardContadorRanking(
-                              "Entregadores",
-                              "entregador",
-                              Colors.red,
+                              'Entregadores',
+                              'entregador',
+                              const Color(0xFFEF4444),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 40),
+                        const SizedBox(height: 44),
 
                         // === SEÇÃO 3: VISÃO FINANCEIRA ===
-                        const Text(
-                          "Módulo Financeiro",
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
+                        Text(
+                          'Módulo financeiro',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF1E1B4B),
                           ),
                         ),
-                        const SizedBox(height: 15),
-                        InkWell(
-                          onTap: () => Navigator.pushReplacementNamed(
-                            context,
-                            '/financeiro',
+                        const SizedBox(height: 6),
+                        Text(
+                          'Receitas e movimentações do ecossistema.',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 13,
+                            color: PainelAdminTheme.textoSecundario,
                           ),
-                          child: Card(
-                            elevation: 4,
-                            color: Colors.green[50],
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.all(20),
-                              decoration: const BoxDecoration(
-                                border: Border(
-                                  top: BorderSide(
-                                    color: Colors.green,
-                                    width: 5,
-                                  ),
+                        ),
+                        const SizedBox(height: 18),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => context.navegarPainel('/financeiro'),
+                            borderRadius: BorderRadius.circular(18),
+                            child: Ink(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(18),
+                                gradient: const LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Color(0xFFECFDF5),
+                                    Color(0xFFD1FAE5),
+                                  ],
                                 ),
-                              ),
-                              child: const Row(
-                                children: [
-                                  Icon(
-                                    Icons.monetization_on,
-                                    color: Colors.green,
-                                    size: 40,
-                                  ),
-                                  SizedBox(width: 20),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          "Visão Financeira",
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 18,
-                                            color: Colors.green,
-                                          ),
-                                        ),
-                                        SizedBox(height: 5),
-                                        Text(
-                                          "Gerencie receitas de Destaques, Vitrine, Telefones Premium e Assinaturas.",
-                                          style: TextStyle(
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Icon(
-                                    Icons.arrow_forward_ios,
-                                    color: Colors.green,
+                                border: Border.all(
+                                  color: const Color(0xFF6EE7B7).withOpacity(0.65),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFF10B981).withOpacity(0.12),
+                                    blurRadius: 24,
+                                    offset: const Offset(0, 10),
                                   ),
                                 ],
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.9),
+                                        borderRadius: BorderRadius.circular(16),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: const Color(0xFF10B981)
+                                                .withOpacity(0.15),
+                                            blurRadius: 12,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      child: const Icon(
+                                        Icons.account_balance_rounded,
+                                        color: Color(0xFF059669),
+                                        size: 32,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 22),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Visão financeira',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 18,
+                                              color: const Color(0xFF047857),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Gerencie receitas de destaques, vitrine, telefones premium e assinaturas.',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              color: const Color(0xFF065F46),
+                                              fontSize: 14,
+                                              height: 1.5,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.7),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(
+                                        Icons.arrow_forward_rounded,
+                                        color: Color(0xFF059669),
+                                        size: 22,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -659,10 +804,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         const SizedBox(height: 50),
                       ],
                     ),
-                  ),
-          ),
-        ],
-      ),
+            ),
       floatingActionButton: const BotaoSuporteFlutuante(),
     );
   }

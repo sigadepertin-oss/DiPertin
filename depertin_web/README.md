@@ -19,7 +19,7 @@
 
 ## Sobre
 
-O **DiPertin Admin** é o painel administrativo da plataforma DiPertin. Desenvolvido em Flutter para web e desktop, permite à equipa de operações gerir todos os aspectos do marketplace — lojas, entregadores, finanças, banners, cidades e suporte ao cliente.
+O **DiPertin Admin** é o painel administrativo da plataforma DiPertin. Desenvolvido em Flutter para web e desktop, permite à equipe de operações gerenciar todos os aspectos do marketplace — lojas, entregadores, finanças, banners, cidades e suporte ao cliente.
 
 ## Funcionalidades
 
@@ -34,7 +34,7 @@ O **DiPertin Admin** é o painel administrativo da plataforma DiPertin. Desenvol
 
 ### Gestão de Entregadores
 - Aprovação de candidaturas de entregadores
-- Monitorização de status e atividade
+- Monitoramento de status e atividade
 
 ### Financeiro
 - Acompanhamento de receitas da plataforma
@@ -55,7 +55,7 @@ O **DiPertin Admin** é o painel administrativo da plataforma DiPertin. Desenvol
 - Tabela de fretes
 
 ### Utilidades
-- Gestão de vagas, achados e eventos publicados pelos utilizadores
+- Gestão de vagas, achados e eventos publicados pelos usuários
 
 ### Suporte
 - Atendimento a tickets de suporte via chat
@@ -77,7 +77,7 @@ lib/
 │   ├── admin_city_screen.dart             # Gestão de cidades
 │   ├── configuracoes_screen.dart          # Configurações gerais
 │   ├── utilidades_screen.dart             # Vagas, achados, eventos
-│   └── atendimento_suporte_screen.dart    # Suporte ao utilizador
+│   └── atendimento_suporte_screen.dart    # Suporte ao usuário
 └── widgets/
     ├── sidebar_menu.dart                  # Menu lateral de navegação
     └── botao_suporte_flutuante.dart       # Botão flutuante de suporte
@@ -85,7 +85,7 @@ lib/
 
 ## Rotas
 
-| Rota | Ecrã | Descrição |
+| Rota | Tela | Descrição |
 |------|------|-----------|
 | `/login` | Login Admin | Autenticação do administrador |
 | `/dashboard` | Dashboard | Painel principal com métricas |
@@ -128,7 +128,7 @@ flutter pub get
 # Executar na web
 flutter run -d chrome
 
-# Executar no telemóvel/emulador Android ou iOS
+# Executar no celular ou emulador Android ou iOS
 flutter run
 ```
 
@@ -146,11 +146,11 @@ flutter build apk
 flutter build ios
 ```
 
-Os artefactos ficam em `build/web/`, `build/app/outputs/...`, etc.
+Os artefatos ficam em `build/web/`, `build/app/outputs/...`, etc.
 
 ## Relação com o App Cliente
 
-Este painel gere os dados consumidos pelo [DiPertin Cliente](../depertin_cliente/), partilhando o mesmo projeto Firebase (`depertin-f940f`) e as mesmas coleções Firestore. Alterações feitas aqui (aprovar lojas, configurar taxas, gerir banners) refletem-se em tempo real no app dos utilizadores.
+Este painel gerencia os dados consumidos pelo [DiPertin Cliente](../depertin_cliente/), compartilhando o mesmo projeto Firebase (`depertin-f940f`) e as mesmas coleções Firestore. Alterações feitas aqui (aprovar lojas, configurar taxas, gerenciar banners) refletem-se em tempo real no app dos usuários.
 
 ## Licença
 

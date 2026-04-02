@@ -1,22 +1,26 @@
-import 'package:depertin_web/screens/configuracoes_screen.dart';
-import 'package:depertin_web/screens/financeiro_screen.dart';
-import 'package:depertin_web/screens/utilidades_screen.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
-import 'screens/dashboard_screen.dart';
+import 'navigation/painel_routes.dart';
+import 'theme/painel_admin_theme.dart';
 import 'screens/login_admin_screen.dart';
-import 'screens/atendimento_suporte_screen.dart';
-import 'screens/admin_city_screen.dart';
-import 'screens/lojas_screen.dart';
-import 'screens/entregadores_screen.dart';
-import 'screens/banners_screen.dart';
+import 'widgets/painel_shell_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const DiPertinAdminApp());
+}
+
+/// Rota sem animação (troca instantânea) — usada ao abrir URLs diretas do painel no web.
+Route<void> _rotaPainelInstantanea(RouteSettings settings, Widget child) {
+  return PageRouteBuilder<void>(
+    settings: settings,
+    pageBuilder: (context, animation, secondaryAnimation) => child,
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: Duration.zero,
+  );
 }
 
 class DiPertinAdminApp extends StatelessWidget {
@@ -33,26 +37,23 @@ class DiPertinAdminApp extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: const [
-        Locale('pt', 'BR'), // Define o idioma como Português do Brasil
+        Locale('pt', 'BR'),
       ],
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6A1B9A)),
-        useMaterial3: true,
-        fontFamily: 'Roboto',
-      ),
-      // MUDANÇA AQUI: A rota inicial agora é o Login
+      theme: PainelAdminTheme.theme(),
       initialRoute: '/login',
       routes: {
         '/login': (context) => const LoginAdminScreen(),
-        '/dashboard': (context) => const DashboardScreen(),
-        '/admincity': (context) => const AdminCityScreen(),
-        '/lojas': (context) => const LojasScreen(),
-        '/utilidades': (context) => const UtilidadesScreen(),
-        '/financeiro': (context) => const FinanceiroScreen(),
-        '/configuracoes': (context) => const ConfiguracoesScreen(),
-        '/entregadores': (context) => const EntregadoresScreen(),
-        '/banners': (context) => const BannersScreen(),
-        '/atendimento_suporte': (context) => const AtendimentoSuporteScreen(),
+        '/painel': (context) => const PainelShellScreen(),
+      },
+      onGenerateRoute: (RouteSettings settings) {
+        final name = settings.name;
+        if (name != null && PainelRoutes.isShellRoute(name)) {
+          return _rotaPainelInstantanea(
+            settings,
+            PainelShellScreen(initialRoute: name),
+          );
+        }
+        return null;
       },
     );
   }

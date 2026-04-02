@@ -2,6 +2,7 @@
 
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
@@ -9,7 +10,9 @@ import 'package:geocoding/geocoding.dart';
 // === NOVOS PACOTES PARA A FOTO ===
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter_multi_formatter/flutter_multi_formatter.dart';
 import '../../services/location_service.dart';
+import '../../utils/cpf_perfil_usuario.dart';
 
 const Color diPertinRoxo = Color(0xFF6A1B9A);
 const Color diPertinLaranja = Color(0xFFFF8F00);
@@ -34,6 +37,7 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _nomeController;
+  final TextEditingController _cpfController = TextEditingController();
   final TextEditingController _ruaC = TextEditingController();
   final TextEditingController _numeroC = TextEditingController();
   final TextEditingController _bairroC = TextEditingController();
@@ -43,6 +47,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _salvando = false;
   bool _buscandoLocalizacao = false;
   bool _carregandoDados = true;
+  bool _cpfAlteracaoBloqueada = false;
   String _ufCapturado = '';
 
   // === VARIÁVEIS DA FOTO ===
@@ -84,6 +89,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               _complementoC.text = end['complemento'] ?? '';
             } else if (widget.enderecoAtual.isNotEmpty) {
               _ruaC.text = widget.enderecoAtual;
+            }
+
+            _cpfAlteracaoBloqueada = CpfPerfilUsuario.edicaoBloqueada(dados);
+            final cpfSalvo = (dados['cpf'] ?? '').toString();
+            final dCpf = CpfPerfilUsuario.somenteDigitos(cpfSalvo);
+            if (dCpf.length == 11) {
+              _cpfController.text = CpfPerfilUsuario.comMascara11(dCpf);
+            } else if (cpfSalvo.isNotEmpty) {
+              _cpfController.text = cpfSalvo;
             }
           });
         }
@@ -251,6 +265,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       return;
     }
 
+    if (!_cpfAlteracaoBloqueada) {
+      final dig = CpfPerfilUsuario.somenteDigitos(_cpfController.text);
+      if (dig.isNotEmpty && !CpfPerfilUsuario.digitosCpfValidos(dig)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('CPF inválido. Confira os 11 dígitos.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
+
     setState(() => _salvando = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -299,6 +326,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
         if (_urlFotoAtual.isEmpty && _imagemSelecionada == null) {
           dadosParaSalvar['foto_perfil'] = '';
+        }
+
+        if (!_cpfAlteracaoBloqueada) {
+          final dig = CpfPerfilUsuario.somenteDigitos(_cpfController.text);
+          if (dig.isNotEmpty) {
+            dadosParaSalvar['cpf'] = CpfPerfilUsuario.comMascara11(dig);
+            dadosParaSalvar['cpf_alteracao_bloqueada'] = true;
+          }
         }
 
         await FirebaseFirestore.instance
@@ -417,6 +452,46 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     label: "Seu Nome Completo",
                     icon: Icons.person,
                   ),
+                  const SizedBox(height: 15),
+                  if (_cpfAlteracaoBloqueada) ...[
+                    _buildTextField(
+                      controller: _cpfController,
+                      label: "CPF",
+                      icon: Icons.badge_outlined,
+                      readOnly: true,
+                      keyboardType: TextInputType.number,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, top: 6, bottom: 4),
+                      child: Text(
+                        "Para alterar o CPF, fale com o suporte pelo app.",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                  ] else ...[
+                    _buildTextField(
+                      controller: _cpfController,
+                      label: "CPF",
+                      icon: Icons.badge_outlined,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        MaskedInputFormatter('000.000.000-00'),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, top: 6, bottom: 4),
+                      child: Text(
+                        "Após salvar com CPF válido, ele não poderá ser alterado aqui.",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 25),
 
                   const Text(
@@ -538,13 +613,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     required String label,
     IconData? icon,
     TextInputType keyboardType = TextInputType.text,
-    // Adicionamos a capitalização padrão por palavras
     TextCapitalization textCapitalization = TextCapitalization.words,
+    List<TextInputFormatter>? inputFormatters,
+    bool readOnly = false,
   }) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
-      textCapitalization: textCapitalization, // <--- A MÁGICA ACONTECE AQUI
+      textCapitalization: textCapitalization,
+      readOnly: readOnly,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: icon != null

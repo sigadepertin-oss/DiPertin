@@ -44,6 +44,8 @@ dependencies:
     sdk: flutter
   image_picker: ^1.2.1
   http: ^1.6.0
+  google_fonts: ^6.2.1
+  shimmer: ^3.0.0
 
 dev_dependencies:
   flutter_test:

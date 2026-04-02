@@ -19,7 +19,7 @@
 
 ## O que é o DiPertin?
 
-O DiPertin é uma plataforma completa de comércio e delivery local. Os **clientes** compram produtos de lojas da sua cidade, os **lojistas** gerem os seus catálogos e pedidos, e os **entregadores** fazem as entregas — tudo dentro de um ecossistema integrado.
+O DiPertin é uma plataforma completa de comércio e delivery local. Os **clientes** compram produtos de lojas da sua cidade, os **lojistas** gerenciam seus catálogos e pedidos, e os **entregadores** fazem as entregas — tudo dentro de um ecossistema integrado.
 
 ## Estrutura do Repositório
 
@@ -106,7 +106,7 @@ firebase deploy --only functions
 
 ## Projeto Firebase
 
-Ambas as aplicações partilham o mesmo projeto Firebase: **`depertin-f940f`**
+Ambos os aplicativos compartilham o mesmo projeto Firebase: **`depertin-f940f`**
 
 ## Licença
 

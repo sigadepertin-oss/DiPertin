@@ -201,28 +201,134 @@ service cloud.firestore {
     }
 
     match /suporte/{ticketId} {
+      // Legado — mantido para histórico; novos atendimentos usam support_tickets
       allow read: if signedIn() && (
         isStaff() ||
-        ('user_id' in resource.data && resource.data.user_id == request.auth.uid)
+        ('user_id' in resource.data && resource.data.user_id == request.auth.uid) ||
+        ('cliente_id' in resource.data && resource.data.cliente_id == request.auth.uid)
       );
       allow create: if signedIn();
       allow update: if signedIn() && (
         isStaff() ||
-        ('user_id' in resource.data && resource.data.user_id == request.auth.uid)
+        ('user_id' in resource.data && resource.data.user_id == request.auth.uid) ||
+        ('cliente_id' in resource.data && resource.data.cliente_id == request.auth.uid)
       );
 
       match /mensagens/{msgId} {
-        function ticket() {
+        function ticketLegado() {
           return get(/databases/$(database)/documents/suporte/$(ticketId)).data;
         }
 
         allow read: if signedIn() && (
           isStaff() ||
-          ('user_id' in ticket() && ticket().user_id == request.auth.uid)
+          ('user_id' in ticketLegado() && ticketLegado().user_id == request.auth.uid) ||
+          ('cliente_id' in ticketLegado() && ticketLegado().cliente_id == request.auth.uid)
         );
         allow create: if signedIn();
         allow update, delete: if isStaff();
       }
+    }
+
+    // Central de Ajuda — protocolo, fila e mensagens (modelo atual).
+    // Push para o cliente: Cloud Functions (Admin SDK) em criação do ticket,
+    // nova mensagem do atendente (sender_type agent) e encerramento (closed + closed_by support).
+    match /support_tickets/{ticketId} {
+      function ticketOwner() {
+        return signedIn() && resource.data.user_id == request.auth.uid;
+      }
+
+      function ticketCreateOwner() {
+        return signedIn() && request.resource.data.user_id == request.auth.uid;
+      }
+
+      allow read: if isStaff() || ticketOwner();
+
+      allow create: if ticketCreateOwner()
+        && request.resource.data.protocol_number is int
+        && request.resource.data.protocol_number >= 10000000
+        && request.resource.data.protocol_number <= 99999999
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.keys().hasAll([
+          'protocol_number', 'user_id', 'user_nome', 'cidade', 'status',
+          'created_at', 'updated_at'
+        ]);
+
+      // Cliente: pode cancelar ou atualizar prévia/updated_at; não pode assumir atendimento
+      allow update: if isStaff() || (
+        ticketOwner()
+        && request.resource.data.user_id == resource.data.user_id
+        && request.resource.data.protocol_number == resource.data.protocol_number
+        && request.resource.data.created_at == resource.data.created_at
+        && request.resource.data.agent_id == resource.data.agent_id
+        && request.resource.data.agent_nome == resource.data.agent_nome
+        && (
+          !('started_at' in resource.data)
+          || request.resource.data.started_at == resource.data.started_at
+        )
+        && (
+          request.resource.data.status == resource.data.status
+          || (
+            request.resource.data.status == 'cancelled'
+            && resource.data.status in ['waiting', 'in_progress']
+          )
+        )
+        && !(
+          resource.data.status == 'waiting'
+          && request.resource.data.status == 'in_progress'
+        )
+        && (
+          request.resource.data.status == 'cancelled'
+          || (
+            request.resource.data.finished_at == resource.data.finished_at
+            && (
+              !('closed_by' in resource.data)
+              || request.resource.data.closed_by == resource.data.closed_by
+            )
+          )
+        )
+      );
+
+      match /mensagens/{msgId} {
+        function ticketAtual() {
+          return get(/databases/$(database)/documents/support_tickets/$(ticketId)).data;
+        }
+
+        allow read: if isStaff() || (
+          signedIn() && ticketAtual().user_id == request.auth.uid
+        );
+
+        allow create: if signedIn() && (
+          (
+            isStaff()
+            && ticketAtual().status == 'in_progress'
+            && ticketAtual().agent_id == request.auth.uid
+            && request.resource.data.sender_type in ['agent', 'system']
+          )
+          || (
+            ticketAtual().user_id == request.auth.uid
+            && ticketAtual().status in ['waiting', 'in_progress']
+            && request.resource.data.sender_type == 'client'
+          )
+        )
+        && request.resource.data.keys().hasAll([
+          'mensagem', 'sender_id', 'sender_type', 'created_at'
+        ]);
+
+        allow update, delete: if isStaff();
+      }
+    }
+
+    match /support_ratings/{ratingId} {
+      allow read: if isStaff() || (
+        signedIn()
+        && resource.data.user_id == request.auth.uid
+      );
+      allow create: if signedIn()
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'ticket_id', 'user_id', 'rating', 'created_at'
+        ]);
+      allow update, delete: if isStaff();
     }
 
     match /configuracoes/{id} {
@@ -230,8 +336,23 @@ service cloud.firestore {
       allow write: if isStaff();
     }
 
+    // Recuperação de senha — apenas Cloud Functions (Admin SDK)
+    match /password_reset_tokens/{id} {
+      allow read, write: if false;
+    }
+    match /password_reset_rate_email/{id} {
+      allow read, write: if false;
+    }
+    match /password_reset_rate_ip/{id} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
-      allow read, write: if isStaff();
+      // Staff, exceto dados sensíveis de recuperação de senha (só Admin SDK)
+      allow read, write: if isStaff()
+        && !request.path.matches('databases/{database}/documents/password_reset_tokens/{docId}')
+        && !request.path.matches('databases/{database}/documents/password_reset_rate_email/{docId}')
+        && !request.path.matches('databases/{database}/documents/password_reset_rate_ip/{docId}');
     }
   }
 }

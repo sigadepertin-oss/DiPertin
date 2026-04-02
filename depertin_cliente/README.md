@@ -19,7 +19,7 @@
 
 ## Sobre
 
-O **DiPertin** é uma aplicação mobile (Android/iOS) que conecta **clientes**, **lojistas** e **entregadores** numa única plataforma de comércio e delivery local. Cada perfil tem a sua experiência dedicada dentro do mesmo app.
+O **DiPertin** é um aplicativo mobile (Android/iOS) que conecta **clientes**, **lojistas** e **entregadores** em uma única plataforma de comércio e delivery local. Cada perfil tem sua experiência dedicada dentro do mesmo app.
 
 ## Funcionalidades
 
@@ -58,14 +58,14 @@ lib/
 ├── main.dart                    # Entrada, Firebase, FCM, navegação
 ├── firebase_options.dart        # Configuração Firebase (gerado)
 ├── models/
-│   ├── user_model.dart          # Modelo de utilizador
+│   ├── user_model.dart          # Modelo de usuário
 │   ├── product_model.dart       # Modelo de produto
 │   ├── cart_item_model.dart     # Modelo de item do carrinho
 │   └── banner_model.dart        # Modelo de banner promocional
 ├── providers/
 │   └── cart_provider.dart       # Estado do carrinho (Provider + SharedPreferences)
 └── screens/
-    ├── auth/                    # Login e registo
+    ├── auth/                    # Login e cadastro
     ├── cliente/                 # Vitrine, carrinho, checkout, pedidos, chat
     ├── lojista/                 # Dashboard, pedidos, produtos, config, avaliações
     ├── entregador/              # Dashboard, mapa, carteira, histórico
@@ -80,7 +80,7 @@ O diretório `functions/` contém duas Cloud Functions (Node.js 20) que responde
 | Função | Trigger | Descrição |
 |--------|---------|-----------|
 | `notificarNovoPedido` | `onCreate` em `pedidos/{id}` | Envia push FCM ao lojista quando um novo pedido é criado |
-| `notificarEntregadoresPedidoPronto` | `onUpdate` em `pedidos/{id}` | Notifica todos os entregadores quando um pedido está pronto para recolha |
+| `notificarEntregadoresPedidoPronto` | `onUpdate` em `pedidos/{id}` | Notifica todos os entregadores quando um pedido está pronto para retirada |
 
 ## Stack Tecnológica
 
@@ -147,9 +147,9 @@ firebase deploy --only functions
 
 ## Firebase (regras, Storage, índices)
 
-Não uses palavra-passe em scripts. Autenticação: **`firebase login`** (abre o browser).
+Não use senha em scripts. Autenticação: **`firebase login`** (abre o navegador).
 
-1. Instala a CLI: `npm install -g firebase-tools`
+1. Instale a CLI: `npm install -g firebase-tools`
 2. Na pasta `depertin_cliente`: `firebase login`
 3. Publica regras e índices:
 
@@ -159,9 +159,9 @@ Não uses palavra-passe em scripts. Autenticação: **`firebase login`** (abre o
 .\firebase_deploy.ps1 indexes   # só índices compostos
 ```
 
-Ficheiros: `firestore.rules`, `firestore.indexes.json`, `storage.rules`, `firebase.json`.
+Arquivos: `firestore.rules`, `firestore.indexes.json`, `storage.rules`, `firebase.json`.
 
-**Nota:** O Firestore e o Storage são criados na [Consola Firebase](https://console.firebase.google.com/) (modo nativo). As regras e índices são versionados neste repositório e aplicados com o deploy.
+**Nota:** O Firestore e o Storage são criados no [Console do Firebase](https://console.firebase.google.com/) (modo nativo). As regras e índices são versionados neste repositório e aplicados com o deploy.
 
 ## Licença
 

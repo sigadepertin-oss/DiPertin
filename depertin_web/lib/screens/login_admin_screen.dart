@@ -98,7 +98,7 @@ class _LoginAdminScreenState extends State<LoginAdminScreen> {
 
       // 5. TUDO CERTO! BEM-VINDO AO PAINEL!
       if (mounted) {
-        Navigator.pushReplacementNamed(context, '/dashboard');
+        Navigator.pushReplacementNamed(context, '/painel');
       }
     } on FirebaseAuthException catch (e) {
       String mensagem = 'Erro ao conectar. Tente novamente.';
@@ -170,7 +170,7 @@ class _LoginAdminScreenState extends State<LoginAdminScreen> {
                   Navigator.pop(context); // Fecha o modal
                   Navigator.pushReplacementNamed(
                     context,
-                    '/dashboard',
+                    '/painel',
                   ); // Libera o acesso ao painel
                 }
               } catch (e) {
@@ -274,7 +274,7 @@ class _LoginAdminScreenState extends State<LoginAdminScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Se existir conta com $email, enviámos um e-mail para redefinir a senha.',
+              'Se existir conta com $email, enviamos um e-mail para redefinir a senha.',
             ),
             backgroundColor: Colors.green.shade700,
           ),

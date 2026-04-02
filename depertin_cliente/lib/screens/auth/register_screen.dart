@@ -99,6 +99,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             'role': 'cliente',
             'ativo': true,
             'status_conta': 'ativa',
+            'cpf_alteracao_bloqueada': true,
             'dataCadastro': FieldValue.serverTimestamp(),
             'totalConcluido': 0,
           });
@@ -166,6 +167,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             'role': 'cliente',
             'tipoUsuario': 'cliente',
             'ativo': true,
+            'cpf_alteracao_bloqueada': false,
             'dataCadastro': FieldValue.serverTimestamp(),
             'totalConcluido': 0,
           });
@@ -174,7 +176,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Conta Google OK, perfil não guardado: $e'),
+                content: Text('Conta Google conectada, mas o perfil não foi salvo: $e'),
                 backgroundColor: Colors.orange,
               ),
             );

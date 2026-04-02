@@ -1,8 +1,6 @@
 import 'package:depertin_web/widgets/botao_suporte_flutuante.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../widgets/sidebar_menu.dart';
-
 class AdminCityScreen extends StatefulWidget {
   const AdminCityScreen({super.key});
 
@@ -502,19 +500,14 @@ class _AdminCityScreenState extends State<AdminCityScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[100],
-      body: Row(
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SidebarMenu(rotaAtual: '/admincity'),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(30),
-                  child: Row(
+          Container(
+            width: double.infinity,
+            color: Colors.white,
+            padding: const EdgeInsets.all(30),
+            child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Column(
@@ -764,9 +757,6 @@ class _AdminCityScreenState extends State<AdminCityScreen> {
                     },
                   ),
                 ),
-              ],
-            ),
-          ),
         ],
       ),
       floatingActionButton: const BotaoSuporteFlutuante(),

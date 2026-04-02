@@ -46,7 +46,7 @@ Future<void> abrirFluxoExclusaoConta(BuildContext context) async {
             children: [
               CircularProgressIndicator(color: _laranja),
               SizedBox(height: 16),
-              Text('Processando seu pedido de exclusão de conta…'),
+              Text('Processando sua solicitação de exclusão de conta…'),
             ],
           ),
         ),
@@ -76,7 +76,7 @@ Future<void> abrirFluxoExclusaoConta(BuildContext context) async {
       Navigator.of(context, rootNavigator: true).pop();
       final mensagem = e is StateError
           ? e.message
-          : 'Não foi possível concluir o pedido. Verifique a internet e tente novamente.';
+          : 'Não foi possível concluir a solicitação. Verifique a internet e tente novamente.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(mensagem),
@@ -269,7 +269,7 @@ class _DialogoZonaRiscoPasso1 extends StatelessWidget {
                 'Você está iniciando um processo de exclusão da sua conta no DiPertin.\n\n'
                 '• A conta será marcada para exclusão — não será apagada na hora.\n'
                 '• Há um período de retenção de 30 dias, conforme nossa política.\n'
-                '• Durante esse período, se você entrar de novo, o pedido será cancelado automaticamente.',
+                '• Durante esse período, se você entrar de novo, a solicitação será cancelada automaticamente.',
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.45,
