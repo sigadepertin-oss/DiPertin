@@ -1,12 +1,13 @@
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
+import '../navigation/painel_nav_controller.dart';
 import '../navigation/painel_navigation_scope.dart';
+import '../services/firebase_functions_config.dart';
 import '../theme/painel_admin_theme.dart';
 import '../utils/admin_perfil.dart';
 import '../widgets/botao_suporte_flutuante.dart';
@@ -33,10 +34,29 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
   /// Future cacheado para evitar refetch desnecessário a cada rebuild.
   late Future<Map<String, dynamic>> _futureFinanceiro;
 
+  PainelNavController? _navCtrl;
+
   @override
   void initState() {
     super.initState();
     _futureFinanceiro = _buscarDadosFinanceiros();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ctrl = PainelNavigationScope.maybeOf(context);
+    if (ctrl != _navCtrl) {
+      _navCtrl?.removeListener(_onRotaMudou);
+      _navCtrl = ctrl;
+      _navCtrl?.addListener(_onRotaMudou);
+    }
+  }
+
+  void _onRotaMudou() {
+    if (_navCtrl?.currentRoute == '/financeiro') {
+      _atualizarFinanceiro();
+    }
   }
 
   /// Atualiza o future e opcionalmente reinicia a paginação.
@@ -807,11 +827,59 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
     );
   }
 
+  bool _dentroFiltro(DateTime dt) {
+    if (_dataInicioFiltro == null || _dataFimFiltro == null) return true;
+    return !dt.isBefore(_dataInicioFiltro!) && !dt.isAfter(_dataFimFiltro!);
+  }
+
+  /// Extrai o valor total de um documento de anúncio/publicidade.
+  /// Tenta `valor_total` primeiro; se não existir, calcula a partir de
+  /// `valor_diario`/`valor_mensal`/`valor` + período + modalidade.
+  double _extrairValorDoc(Map<String, dynamic> d) {
+    final vt = _num(d['valor_total']);
+    if (vt > 0) return vt;
+
+    final tsInicio = d['data_inicio'] as Timestamp?;
+    final tsFim = (d['data_fim'] ?? d['data_vencimento']) as Timestamp?;
+    int dias = 1;
+    if (tsInicio != null && tsFim != null) {
+      dias = tsFim.toDate().difference(tsInicio.toDate()).inDays;
+      if (dias <= 0) dias = 1;
+    }
+
+    final modalidade = (d['modalidade_valor'] ?? d['tipo_cobranca'] ?? 'diario').toString();
+
+    final vMensal = _num(d['valor_mensal']);
+    if (vMensal > 0) {
+      final meses = (dias / 30).ceil().clamp(1, 9999);
+      return vMensal * meses;
+    }
+
+    final vDiario = _num(d['valor_diario']);
+    if (vDiario > 0) return vDiario * dias;
+
+    final vBase = _num(d['valor']);
+    if (vBase <= 0) return 0;
+
+    switch (modalidade) {
+      case 'fixo':
+        return vBase;
+      case 'mensal':
+        final meses = (dias / 30).ceil().clamp(1, 9999);
+        return vBase * meses;
+      case 'hora':
+        final horas = dias * 24;
+        return vBase * horas;
+      case 'dia':
+      case 'diario':
+      default:
+        return vBase * dias;
+    }
+  }
+
   Future<Map<String, dynamic>> _buscarDadosFinanceiros() async {
-    double totalGeral = 0;
     double totalComissoes = 0;
     double totalTaxasEntrega = 0;
-    double totalAssinaturas = 0;
     double totalEventos = 0;
     double totalPremium = 0;
     double totalDestaques = 0;
@@ -819,11 +887,118 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
     final historico = <Map<String, dynamic>>[];
     double totalSaidas = 0;
 
-    final receitas = await FirebaseFirestore.instance
+    // ── 1. Comissões e Taxas de corrida ──
+    // Fonte primária: pedidos entregues com campos financeiros calculados.
+    // Fonte secundária: receitas_app (entradas manuais ou legado).
+    try {
+      final pedidosSnap = await FirebaseFirestore.instance
+          .collection('pedidos')
+          .where('status', isEqualTo: 'entregue')
+          .get();
+
+      for (final doc in pedidosSnap.docs) {
+        final d = doc.data();
+        final ts = (d['data_entregue'] ?? d['data_pedido'] ?? d['data_entrega'] ?? d['data_criacao']) as Timestamp?;
+        if (ts != null && !_dentroFiltro(ts.toDate())) continue;
+
+        totalComissoes += _num(d['taxa_plataforma']);
+        totalTaxasEntrega += _num(d['taxa_entregador']);
+      }
+    } catch (_) {}
+
+    // Leitura única de receitas_app (usada para KPIs de comissões/taxas + extrato)
+    final receitasSnap = await FirebaseFirestore.instance
         .collection('receitas_app')
         .orderBy('data_registro', descending: true)
         .get();
 
+    for (final doc in receitasSnap.docs) {
+      final d = doc.data();
+      final tsR = d['data_registro'] as Timestamp?;
+      if (tsR == null) continue;
+      if (!_dentroFiltro(tsR.toDate())) continue;
+
+      final valor = _num(d['valor_total']);
+      if (valor <= 0) continue;
+      final tipo = (d['tipo_receita'] ?? '') as String;
+
+      if (tipo == 'Comissões Lojas') {
+        totalComissoes += valor;
+      } else if (tipo == 'Taxas Entregadores') {
+        totalTaxasEntrega += valor;
+      }
+
+      historico.add({
+        'movimento': 'lucro',
+        'tipo': tipo,
+        'titulo': d['titulo_referencia'] ?? 'Sem título',
+        'dono': d['nome_pagador'] ?? 'Não informado',
+        'valor': valor,
+        'data': tsR.toDate(),
+      });
+    }
+
+    // ── 2. Destaques — servicos_destaque (ativos com valor) ──
+    final destaquesSnap = await FirebaseFirestore.instance
+        .collection('servicos_destaque')
+        .where('ativo', isEqualTo: true)
+        .get();
+
+    for (final doc in destaquesSnap.docs) {
+      final d = doc.data();
+      final v = _extrairValorDoc(d);
+      if (v <= 0) continue;
+      final tsI = (d['data_inicio'] ?? d['data_criacao']) as Timestamp?;
+      if (tsI != null && !_dentroFiltro(tsI.toDate())) continue;
+      totalDestaques += v;
+    }
+
+    // ── 3. Banners — coleção banners (ativos) ──
+    final bannersSnap = await FirebaseFirestore.instance
+        .collection('banners')
+        .where('ativo', isEqualTo: true)
+        .get();
+
+    for (final doc in bannersSnap.docs) {
+      final d = doc.data();
+      final v = _extrairValorDoc(d);
+      if (v <= 0) continue;
+      final tsI = (d['data_inicio'] ?? d['data_criacao']) as Timestamp?;
+      if (tsI != null && !_dentroFiltro(tsI.toDate())) continue;
+      totalDestaques += v;
+    }
+
+    // ── 4. Premium — telefones_premium (ativos com valor) ──
+    final premiumSnap = await FirebaseFirestore.instance
+        .collection('telefones_premium')
+        .where('ativo', isEqualTo: true)
+        .get();
+
+    for (final doc in premiumSnap.docs) {
+      final d = doc.data();
+      final v = _extrairValorDoc(d);
+      if (v <= 0) continue;
+      final tsI = (d['data_inicio'] ?? d['data_criacao']) as Timestamp?;
+      if (tsI != null && !_dentroFiltro(tsI.toDate())) continue;
+      totalPremium += v;
+    }
+
+    // ── 5. Eventos pagos — coleção eventos (ativos com valor) ──
+    final eventosSnap = await FirebaseFirestore.instance
+        .collection('eventos')
+        .where('ativo', isEqualTo: true)
+        .get();
+
+    for (final doc in eventosSnap.docs) {
+      final d = doc.data();
+      final v = _extrairValorDoc(d);
+      if (v <= 0) continue;
+      final tsI = (d['data_inicio'] ?? d['data_criacao']) as Timestamp?;
+      if (tsI != null && !_dentroFiltro(tsI.toDate())) continue;
+      totalEventos += v;
+    }
+
+    // ── 6. Despesas — coleção despesas_app ──
     try {
       final despesasSnap = await FirebaseFirestore.instance
           .collection('despesas_app')
@@ -834,17 +1009,10 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
         final d = doc.data();
         final tsRegistro = d['data_registro'] as Timestamp?;
         if (tsRegistro == null) continue;
-
         final dataRegistro = tsRegistro.toDate();
+        if (!_dentroFiltro(dataRegistro)) continue;
 
-        if (_dataInicioFiltro != null && _dataFimFiltro != null) {
-          if (dataRegistro.isBefore(_dataInicioFiltro!) ||
-              dataRegistro.isAfter(_dataFimFiltro!)) {
-            continue;
-          }
-        }
-
-        final valor = (d['valor_total'] ?? 0).toDouble();
+        final valor = _num(d['valor_total']);
         totalSaidas += valor;
         historico.add({
           'movimento': 'despesa',
@@ -859,62 +1027,18 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
       totalSaidas = 0;
     }
 
-    for (final doc in receitas.docs) {
-      final d = doc.data();
-      final tsRegistro = d['data_registro'] as Timestamp?;
-      if (tsRegistro == null) continue;
-
-      final dataRegistro = tsRegistro.toDate();
-
-      if (_dataInicioFiltro != null && _dataFimFiltro != null) {
-        if (dataRegistro.isBefore(_dataInicioFiltro!) ||
-            dataRegistro.isAfter(_dataFimFiltro!)) {
-          continue;
-        }
-      }
-
-      final valor = (d['valor_total'] ?? 0).toDouble();
-      // Garante que somente receitas (entradas positivas) compõem o faturamento,
-      // sem influência de lançamentos de saída ou dados negativos históricos.
-      if (valor <= 0) continue;
-      final tipo = d['tipo_receita'] ?? 'Outros';
-
-      totalGeral += valor;
-
-      if (tipo == 'Eventos') {
-        totalEventos += valor;
-      } else if (tipo == 'Premium') {
-        totalPremium += valor;
-      } else if (tipo == 'Destaques' || tipo == 'Banners') {
-        totalDestaques += valor;
-      } else if (tipo == 'Comissões Lojas') {
-        totalComissoes += valor;
-      } else if (tipo == 'Taxas Entregadores') {
-        totalTaxasEntrega += valor;
-      } else if (tipo == 'Assinaturas') {
-        totalAssinaturas += valor;
-      }
-
-      historico.add({
-        'movimento': 'lucro',
-        'tipo': tipo,
-        'titulo': d['titulo_referencia'] ?? 'Sem título',
-        'dono': d['nome_pagador'] ?? 'Não informado',
-        'valor': valor,
-        'data': dataRegistro,
-      });
-    }
-
     historico.sort(
       (a, b) => (b['data'] as DateTime).compareTo(a['data'] as DateTime),
     );
+
+    final totalGeral =
+        totalComissoes + totalTaxasEntrega + totalDestaques + totalPremium + totalEventos;
 
     return {
       'totalGeral': totalGeral,
       'totalSaidas': totalSaidas,
       'totalComissoes': totalComissoes,
       'totalTaxasEntrega': totalTaxasEntrega,
-      'totalAssinaturas': totalAssinaturas,
       'totalEventos': totalEventos,
       'totalPremium': totalPremium,
       'totalDestaques': totalDestaques,
@@ -1028,9 +1152,15 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
                                       children: [
                                         _cardTotalPeriodo(
                                           dados['totalGeral'] as double,
+                                          dados['totalSaidas'] as double,
                                         ),
                                         const SizedBox(height: 14),
                                         _cardTotalSaidas(
+                                          dados['totalSaidas'] as double,
+                                        ),
+                                        const SizedBox(height: 14),
+                                        _cardLiquido(
+                                          dados['totalGeral'] as double,
                                           dados['totalSaidas'] as double,
                                         ),
                                       ],
@@ -1046,9 +1176,17 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                _cardTotalPeriodo(dados['totalGeral'] as double),
+                                _cardTotalPeriodo(
+                                  dados['totalGeral'] as double,
+                                  dados['totalSaidas'] as double,
+                                ),
                                 const SizedBox(height: 14),
                                 _cardTotalSaidas(
+                                  dados['totalSaidas'] as double,
+                                ),
+                                const SizedBox(height: 14),
+                                _cardLiquido(
+                                  dados['totalGeral'] as double,
                                   dados['totalSaidas'] as double,
                                 ),
                                 const SizedBox(height: 16),
@@ -1244,7 +1382,7 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
     ];
   }
 
-  Widget _cardTotalPeriodo(double total) {
+  Widget _cardTotalPeriodo(double entradas, double saidas) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
       decoration: BoxDecoration(
@@ -1272,22 +1410,22 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
               letterSpacing: 0.3,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             'Entradas Efetuadas no Período.',
             style: GoogleFonts.plusJakartaSans(
               color: Colors.white.withValues(alpha: 0.65),
-              fontSize: 11,
+              fontSize: 10.5,
               fontWeight: FontWeight.w500,
               height: 1.25,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
-            _brl.format(total),
+            _brl.format(entradas),
             style: GoogleFonts.plusJakartaSans(
               color: Colors.white,
-              fontSize: 28,
+              fontSize: 26,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.5,
               height: 1.1,
@@ -1326,22 +1464,89 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
               letterSpacing: 0.3,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             'Pagamentos Efetuados no Período.',
             style: GoogleFonts.plusJakartaSans(
               color: Colors.white.withValues(alpha: 0.65),
-              fontSize: 11,
+              fontSize: 10.5,
               fontWeight: FontWeight.w500,
               height: 1.25,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
             _brl.format(total),
             style: GoogleFonts.plusJakartaSans(
               color: Colors.white,
-              fontSize: 28,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cardLiquido(double entradas, double saidas) {
+    final liquido = entradas - saidas;
+    final positivo = liquido >= 0;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: positivo
+              ? [const Color(0xFF059669), const Color(0xFF047857)]
+              : [const Color(0xFFDC2626), const Color(0xFFB91C1C)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: PainelAdminTheme.sombraCardSuave(),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              Icon(
+                positivo
+                    ? Icons.trending_up_rounded
+                    : Icons.trending_down_rounded,
+                color: Colors.white.withValues(alpha: 0.85),
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Resultado Líquido',
+                style: GoogleFonts.plusJakartaSans(
+                  color: Colors.white.withValues(alpha: 0.88),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Faturamento − Despesas',
+            style: GoogleFonts.plusJakartaSans(
+              color: Colors.white.withValues(alpha: 0.65),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w500,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _brl.format(liquido),
+            style: GoogleFonts.plusJakartaSans(
+              color: Colors.white,
+              fontSize: 26,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.5,
               height: 1.1,
@@ -1365,12 +1570,6 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
         dados['totalTaxasEntrega'] as double,
         const Color(0xFFDC2626),
         Icons.two_wheeler_outlined,
-      ),
-      _KpiItem(
-        'Assinaturas VIP',
-        dados['totalAssinaturas'] as double,
-        const Color(0xFF059669),
-        Icons.card_membership_outlined,
       ),
       _KpiItem(
         'Destaques & banners',
@@ -2032,22 +2231,174 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
 
   // ─── Seção de Estornos ─────────────────────────────────────────────────────
 
-  late final _ctrlLojaPesquisa = TextEditingController();
+  TextEditingController _ctrlLojaPesquisa = TextEditingController();
   late final _ctrlEstornoValor = TextEditingController();
   late final _ctrlEstornoMotivo = TextEditingController();
-  late final _ctrlEstornoPedidoId = TextEditingController();
+
+  String? _lojaUidSelecionado;
+  List<Map<String, dynamic>> _lojasCache = [];
+  bool _lojasCacheCarregado = false;
+
+  String? _pedidoIdSelecionado;
+  double? _pedidoValorSelecionado;
+  List<Map<String, dynamic>> _pedidosLojaCache = [];
+  bool _pedidosLojaCarregando = false;
+  TextEditingController _ctrlPedidoPesquisa = TextEditingController();
+
+  Future<void> _carregarPedidosDaLoja(String lojaUid) async {
+    setState(() {
+      _pedidosLojaCarregando = true;
+      _pedidosLojaCache = [];
+      _pedidoIdSelecionado = null;
+      _pedidoValorSelecionado = null;
+      _ctrlEstornoValor.clear();
+    });
+    try {
+      final idsJaAdicionados = <String>{};
+      final lista = <Map<String, dynamic>>[];
+
+      Future<void> buscar(String campo) async {
+        final snap = await FirebaseFirestore.instance
+            .collection('pedidos')
+            .where(campo, isEqualTo: lojaUid)
+            .get();
+        for (final doc in snap.docs) {
+          if (idsJaAdicionados.contains(doc.id)) continue;
+          final d = doc.data();
+          final status = (d['status'] ?? '') as String;
+          if (status != 'entregue') continue;
+          final forma = (d['forma_pagamento'] ?? '').toString();
+          if (forma != 'PIX' && forma != 'Cartão') continue;
+          idsJaAdicionados.add(doc.id);
+          final ts = (d['data_pedido'] ?? d['data_entregue'] ?? d['data_criacao']) as Timestamp?;
+          final clienteNome = (d['cliente_nome'] ?? d['cliente_nome_exibicao'] ?? '') as String;
+          final clienteId = (d['cliente_id'] ?? '') as String;
+          final total = _num(d['total_produtos'] ?? d['subtotal'] ?? d['total'] ?? 0);
+          final formaPgto = (d['forma_pagamento'] ?? '') as String;
+          final totalPedido = _num(d['total'] ?? d['total_produtos'] ?? d['subtotal'] ?? 0);
+          lista.add({
+            'id': doc.id,
+            'status': status,
+            'cliente': clienteNome,
+            'cliente_id': clienteId,
+            'total': total,
+            'total_pedido': totalPedido,
+            'forma_pagamento': formaPgto,
+            'data': ts?.toDate(),
+          });
+        }
+      }
+
+      await Future.wait([buscar('loja_id'), buscar('lojista_id')]);
+
+      lista.sort((a, b) {
+        final da = a['data'] as DateTime?;
+        final db = b['data'] as DateTime?;
+        if (da == null && db == null) return 0;
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return db.compareTo(da);
+      });
+
+      if (mounted) {
+        setState(() {
+          _pedidosLojaCache = lista;
+          _pedidosLojaCarregando = false;
+        });
+      }
+      _resolverNomesClientesPedidos(lista);
+    } catch (_) {
+      if (mounted) setState(() => _pedidosLojaCarregando = false);
+    }
+  }
+
+  final Map<String, String> _cacheNomesClientes = {};
+
+  Future<void> _resolverNomesClientesPedidos(List<Map<String, dynamic>> pedidos) async {
+    final idsParaBuscar = <String>{};
+    for (final p in pedidos) {
+      final cid = (p['cliente_id'] ?? '') as String;
+      final nome = (p['cliente'] ?? '') as String;
+      if (cid.isNotEmpty && nome.isEmpty && !_cacheNomesClientes.containsKey(cid)) {
+        idsParaBuscar.add(cid);
+      }
+    }
+    if (idsParaBuscar.isEmpty) return;
+
+    for (final uid in idsParaBuscar) {
+      try {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        if (!mounted) return;
+        final d = doc.data();
+        _cacheNomesClientes[uid] = d?['nome']?.toString() ??
+            d?['nome_completo']?.toString() ??
+            d?['nome_exibicao']?.toString() ?? 'Cliente';
+      } catch (_) {
+        _cacheNomesClientes[uid] = 'Cliente';
+      }
+    }
+
+    if (!mounted) return;
+    for (final p in _pedidosLojaCache) {
+      final cid = (p['cliente_id'] ?? '') as String;
+      if (cid.isNotEmpty && ((p['cliente'] ?? '') as String).isEmpty) {
+        p['cliente'] = _cacheNomesClientes[cid] ?? 'Cliente';
+      }
+    }
+    setState(() {});
+  }
+
+  List<Map<String, dynamic>> _filtrarPedidos(String query) {
+    if (query.isEmpty) return _pedidosLojaCache.take(30).toList();
+    final q = query.toLowerCase();
+    return _pedidosLojaCache.where((p) {
+      return (p['id'] as String).toLowerCase().contains(q) ||
+          (p['cliente'] as String).toLowerCase().contains(q) ||
+          (p['status'] as String).toLowerCase().contains(q);
+    }).take(30).toList();
+  }
+
+  Future<void> _carregarLojasSeNecessario() async {
+    if (_lojasCacheCarregado) return;
+    _lojasCacheCarregado = true;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', isEqualTo: 'lojista')
+          .get();
+      _lojasCache = snap.docs.map((doc) {
+        final d = doc.data();
+        return {
+          'uid': doc.id,
+          'nome': d['nome_loja'] ?? d['nome_fantasia'] ?? d['nomeFantasia'] ?? d['loja_nome'] ?? d['nome'] ?? doc.id,
+          'cidade': d['cidade'] ?? d['endereco_cidade'] ?? '',
+        };
+      }).toList();
+      _lojasCache.sort((a, b) =>
+          (a['nome'] as String).toLowerCase().compareTo((b['nome'] as String).toLowerCase()));
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> _filtrarLojas(String query) {
+    if (query.isEmpty) return _lojasCache.take(20).toList();
+    final q = query.toLowerCase();
+    return _lojasCache.where((l) {
+      return (l['nome'] as String).toLowerCase().contains(q) ||
+          (l['cidade'] as String).toLowerCase().contains(q) ||
+          (l['uid'] as String).toLowerCase().contains(q);
+    }).take(20).toList();
+  }
 
   @override
   void dispose() {
-    _ctrlLojaPesquisa.dispose();
+    _navCtrl?.removeListener(_onRotaMudou);
     _ctrlEstornoValor.dispose();
     _ctrlEstornoMotivo.dispose();
-    _ctrlEstornoPedidoId.dispose();
     super.dispose();
   }
 
   Future<void> _processarEstorno(BuildContext ctx) async {
-    final lojaId = _ctrlLojaPesquisa.text.trim();
+    final lojaId = _lojaUidSelecionado ?? _ctrlLojaPesquisa.text.trim();
     final valor = double.tryParse(
       _ctrlEstornoValor.text.trim().replaceAll(',', '.'),
     );
@@ -2063,22 +2414,176 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
       return;
     }
 
+    final pedidoId = _pedidoIdSelecionado ?? _ctrlPedidoPesquisa.text.trim();
+    final nomeLoja = _lojasCache
+        .where((l) => l['uid'] == lojaId)
+        .map((l) => l['nome'] as String)
+        .firstOrNull;
+    final pedidoCache = _pedidoIdSelecionado != null
+        ? _pedidosLojaCache.where((p) => p['id'] == _pedidoIdSelecionado).firstOrNull
+        : null;
+    final nomeCliente = (pedidoCache?['cliente'] as String?) ?? '';
+    final formaPgto = (pedidoCache?['forma_pagamento'] as String?) ?? '';
+    final valorPagamento = pedidoCache != null ? (pedidoCache['total_pedido'] as double?) ?? 0.0 : 0.0;
+    final idCurto = pedidoId.isNotEmpty
+        ? '#${pedidoId.substring(0, pedidoId.length.clamp(0, 5)).toUpperCase()}'
+        : '';
+    final parcial = _pedidoValorSelecionado != null && valor < _pedidoValorSelecionado!;
+
     final confirmar = await showDialog<bool>(
       context: ctx,
       builder: (c) => AlertDialog(
-        title: const Text('Confirmar estorno'),
-        content: Text(
-          'Deseja debitar R\$ ${valor.toStringAsFixed(2)} da carteira da loja $lojaId?\n\nMotivo: $motivo',
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: EdgeInsets.zero,
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+        title: Container(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+          decoration: const BoxDecoration(
+            color: Color(0xFFFEF2F2),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDC2626).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.replay_rounded, color: Color(0xFFDC2626), size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Confirmar Estorno',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16, fontWeight: FontWeight.w800, color: const Color(0xFF1E1B4B),
+                      ),
+                    ),
+                    Text(
+                      'Esta ação debitará o saldo da loja',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12, color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 16),
+            if (nomeCliente.isNotEmpty)
+              _linhaResumoEstorno(Icons.person_outline_rounded, 'Cliente', nomeCliente),
+            if (nomeLoja != null)
+              _linhaResumoEstorno(Icons.store_rounded, 'Loja', nomeLoja),
+            if (idCurto.isNotEmpty)
+              _linhaResumoEstorno(Icons.receipt_long_rounded, 'Pedido', idCurto),
+            if (formaPgto.isNotEmpty)
+              _linhaResumoEstorno(Icons.payment_rounded, 'Pagamento', formaPgto),
+            if (valorPagamento > 0)
+              _linhaResumoEstorno(Icons.monetization_on_outlined, 'Valor do pedido',
+                  'R\$ ${valorPagamento.toStringAsFixed(2)}'),
+            const Divider(height: 24),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.currency_exchange_rounded, color: Color(0xFFDC2626), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          parcial ? 'Estorno parcial' : 'Valor do estorno',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11, fontWeight: FontWeight.w600, color: const Color(0xFFDC2626),
+                          ),
+                        ),
+                        Text(
+                          'R\$ ${valor.toStringAsFixed(2)}',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 20, fontWeight: FontWeight.w800, color: const Color(0xFFDC2626),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (parcial)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'PARCIAL',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 10, fontWeight: FontWeight.w800, color: const Color(0xFFF59E0B),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _linhaResumoEstorno(Icons.edit_note_rounded, 'Motivo', motivo),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.account_balance_rounded, color: Color(0xFF3B82F6), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'O estorno será processado automaticamente via Mercado Pago e o valor devolvido à conta do cliente.',
+                      style: GoogleFonts.plusJakartaSans(fontSize: 11, color: const Color(0xFF1E40AF)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(c, false),
-            child: const Text('Cancelar'),
+            child: Text(
+              'Cancelar',
+              style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600, color: Colors.grey.shade600),
+            ),
           ),
-          FilledButton(
+          FilledButton.icon(
             onPressed: () => Navigator.pop(c, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Confirmar estorno'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
+            icon: const Icon(Icons.replay_rounded, size: 16),
+            label: Text(
+              'Confirmar estorno',
+              style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
@@ -2086,55 +2591,277 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
 
     if (confirmar != true) return;
 
+    if (!ctx.mounted) return;
+    _mostrarEstornoLoading(ctx);
+
     try {
-      final pedidoId = _ctrlEstornoPedidoId.text.trim();
-      final masterUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      final resultado = await callFirebaseFunctionSafe(
+        'processarEstornoPainel',
+        parameters: {
+          'lojaId': lojaId,
+          'pedidoId': pedidoId,
+          'valor': valor,
+          'motivo': motivo,
+        },
+        timeout: const Duration(seconds: 30),
+      );
 
-      final batch = FirebaseFirestore.instance.batch();
+      if (!ctx.mounted) return;
+      Navigator.of(ctx).pop();
 
-      // Registra o estorno
-      final estornoRef =
-          FirebaseFirestore.instance.collection('estornos').doc();
-      batch.set(estornoRef, {
-        'loja_id': lojaId,
-        'pedido_id': pedidoId,
-        'valor': valor,
-        'motivo': motivo,
-        'status': 'processado',
-        'feito_por': masterUid,
-        'data_estorno': FieldValue.serverTimestamp(),
+      setState(() {
+        _ctrlLojaPesquisa.clear();
+        _ctrlEstornoValor.clear();
+        _ctrlEstornoMotivo.clear();
+        _ctrlPedidoPesquisa.clear();
+        _lojaUidSelecionado = null;
+        _pedidoIdSelecionado = null;
+        _pedidoValorSelecionado = null;
+        _pedidosLojaCache = [];
       });
 
-      // Decrementa o saldo da loja
-      final lojaRef =
-          FirebaseFirestore.instance.collection('users').doc(lojaId);
-      batch.update(lojaRef, {'saldo': FieldValue.increment(-valor)});
-
-      await batch.commit();
-
-      _ctrlLojaPesquisa.clear();
-      _ctrlEstornoValor.clear();
-      _ctrlEstornoMotivo.clear();
-      _ctrlEstornoPedidoId.clear();
-
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(
-            content: Text('Estorno processado com sucesso!'),
-            backgroundColor: Color(0xFF16A34A),
-          ),
-        );
+        _mostrarEstornoSucesso(ctx, valor, idCurto, resultado);
       }
     } catch (e) {
+      if (ctx.mounted) Navigator.of(ctx).pop();
+
+      final mensagem = e is CallableHttpException
+          ? e.message
+          : e.toString().replaceAll('Exception: ', '');
+
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao processar estorno: $e'),
-            backgroundColor: const Color(0xFFDC2626),
-          ),
-        );
+        _mostrarEstornoErro(ctx, mensagem);
       }
     }
+  }
+
+  void _mostrarEstornoLoading(BuildContext ctx) {
+    showDialog(
+      context: ctx,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 16),
+              SizedBox(
+                width: 56, height: 56,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: PainelAdminTheme.roxo,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Processando estorno...',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 16, fontWeight: FontWeight.w700, color: const Color(0xFF1E1B4B),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Comunicando com o Mercado Pago',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12, color: Colors.grey.shade500,
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _mostrarEstornoSucesso(
+    BuildContext ctx,
+    double valor,
+    String idCurto,
+    Map<String, dynamic> resultado,
+  ) {
+    final clienteNotificado = resultado['cliente_notificado'] == true;
+    showDialog(
+      context: ctx,
+      builder: (c) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: EdgeInsets.zero,
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+        title: Container(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF0FDF4),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF16A34A).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.check_rounded, color: Color(0xFF16A34A), size: 32),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Estorno realizado!',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFF16A34A),
+                ),
+              ),
+            ],
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF16A34A).withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'R\$ ${valor.toStringAsFixed(2)}',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 24, fontWeight: FontWeight.w800, color: const Color(0xFF16A34A),
+                    ),
+                  ),
+                  if (idCurto.isNotEmpty)
+                    Text(
+                      'Pedido $idCurto',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12, color: Colors.grey.shade600,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _linhaResumoEstorno(
+              Icons.account_balance_rounded,
+              'Mercado Pago',
+              'Estorno processado com sucesso',
+            ),
+            _linhaResumoEstorno(
+              Icons.notifications_active_rounded,
+              'Notificação',
+              clienteNotificado ? 'Cliente notificado' : 'Cliente sem token FCM',
+            ),
+            if (resultado['mp_refund_status'] != null)
+              _linhaResumoEstorno(
+                Icons.info_outline_rounded,
+                'Status MP',
+                '${resultado['mp_refund_status']}',
+              ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(c),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: Text(
+              'Fechar',
+              style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarEstornoErro(BuildContext ctx, String mensagem) {
+    showDialog(
+      context: ctx,
+      builder: (c) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        titlePadding: EdgeInsets.zero,
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+        title: Container(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+          decoration: const BoxDecoration(
+            color: Color(0xFFFEF2F2),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDC2626).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.close_rounded, color: Color(0xFFDC2626), size: 32),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Erro no estorno',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFFDC2626),
+                ),
+              ),
+            ],
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      mensagem,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: const Color(0xFFDC2626),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(c),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: Text(
+              'Fechar',
+              style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildEstornosSection() {
@@ -2254,54 +2981,50 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
                     LayoutBuilder(
                       builder: (ctx, c) {
                         final wide = c.maxWidth >= 700;
-                        final campos = [
-                          _campoEstorno(
-                            controller: _ctrlLojaPesquisa,
-                            label: 'UID da loja (lojista)',
-                            icon: Icons.store_rounded,
-                          ),
-                          _campoEstorno(
-                            controller: _ctrlEstornoPedidoId,
-                            label: 'ID do pedido (opcional)',
-                            icon: Icons.receipt_long_rounded,
-                          ),
-                          _campoEstorno(
-                            controller: _ctrlEstornoValor,
-                            label: 'Valor do estorno (R\$)',
-                            icon: Icons.attach_money_rounded,
-                          ),
-                          _campoEstorno(
-                            controller: _ctrlEstornoMotivo,
-                            label: 'Motivo',
-                            icon: Icons.edit_note_rounded,
-                          ),
-                        ];
+                        final buscaLoja = _buildBuscaLojaAutocomplete();
+                        final campoPedido = _buildBuscaPedidoAutocomplete();
+                        final campoValor = _campoEstorno(
+                          controller: _ctrlEstornoValor,
+                          label: 'Valor do estorno (R\$)',
+                          icon: Icons.attach_money_rounded,
+                        );
+                        final campoMotivo = _campoEstorno(
+                          controller: _ctrlEstornoMotivo,
+                          label: 'Motivo',
+                          icon: Icons.edit_note_rounded,
+                        );
                         if (wide) {
                           return Column(
                             children: [
                               Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(child: campos[0]),
+                                  Expanded(child: buscaLoja),
                                   const SizedBox(width: 12),
-                                  Expanded(child: campos[1]),
+                                  Expanded(child: campoPedido),
                                 ],
                               ),
                               const SizedBox(height: 12),
                               Row(
                                 children: [
-                                  Expanded(child: campos[2]),
+                                  Expanded(child: campoValor),
                                   const SizedBox(width: 12),
-                                  Expanded(child: campos[3]),
+                                  Expanded(child: campoMotivo),
                                 ],
                               ),
                             ],
                           );
                         }
                         return Column(
-                          children: campos
-                              .expand((w) => [w, const SizedBox(height: 12)])
-                              .toList()
-                            ..removeLast(),
+                          children: [
+                            buscaLoja,
+                            const SizedBox(height: 12),
+                            campoPedido,
+                            const SizedBox(height: 12),
+                            campoValor,
+                            const SizedBox(height: 12),
+                            campoMotivo,
+                          ],
                         );
                       },
                     ),
@@ -2453,13 +3176,528 @@ class _FinanceiroScreenState extends State<FinanceiroScreen> {
     );
   }
 
+  Widget _buildBuscaLojaAutocomplete() {
+    _carregarLojasSeNecessario();
+
+    final campo = Autocomplete<Map<String, dynamic>>(
+      displayStringForOption: (loja) => loja['nome'] as String,
+      fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+        if (_lojaUidSelecionado != null && controller.text.isEmpty) {
+          final sel = _lojasCache
+              .where((l) => l['uid'] == _lojaUidSelecionado)
+              .firstOrNull;
+          if (sel != null) controller.text = sel['nome'] as String;
+        }
+        _ctrlLojaPesquisa = controller;
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          onSubmitted: (_) => onSubmit(),
+          decoration: InputDecoration(
+            labelText: 'Buscar loja por nome',
+            hintText: 'Digite o nome da loja...',
+            prefixIcon: const Icon(Icons.store_rounded, size: 18),
+            suffixIcon: _lojaUidSelecionado != null
+                ? IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    onPressed: () {
+                      controller.clear();
+                      setState(() {
+                        _lojaUidSelecionado = null;
+                        _pedidosLojaCache = [];
+                        _pedidoIdSelecionado = null;
+                        _pedidoValorSelecionado = null;
+                        _ctrlPedidoPesquisa.clear();
+                        _ctrlEstornoValor.clear();
+                      });
+                    },
+                  )
+                : null,
+            filled: true,
+            fillColor: const Color(0xFFF8F7FC),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(
+                color: _lojaUidSelecionado != null
+                    ? const Color(0xFF16A34A)
+                    : Colors.grey.shade300,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFF7C3AED), width: 1.5),
+            ),
+            labelStyle: GoogleFonts.plusJakartaSans(fontSize: 13),
+            hintStyle: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5, color: Colors.grey.shade400),
+          ),
+          style: GoogleFonts.plusJakartaSans(fontSize: 13),
+        );
+      },
+      optionsBuilder: (textEditingValue) {
+        if (!_lojasCacheCarregado) return [];
+        return _filtrarLojas(textEditingValue.text);
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            color: Colors.white,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280, maxWidth: 420),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                shrinkWrap: true,
+                itemCount: options.length,
+                separatorBuilder: (_, __) =>
+                    const Divider(height: 1, indent: 14, endIndent: 14),
+                itemBuilder: (context, index) {
+                  final loja = options.elementAt(index);
+                  final nome = loja['nome'] as String;
+                  final cidade = loja['cidade'] as String;
+                  final uid = loja['uid'] as String;
+                  return InkWell(
+                    onTap: () => onSelected(loja),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: PainelAdminTheme.roxo.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(Icons.storefront_rounded,
+                                size: 17, color: PainelAdminTheme.roxo),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  nome,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF1E1B4B),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                if (cidade.isNotEmpty)
+                                  Text(
+                                    cidade,
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              uid.length > 8
+                                  ? '${uid.substring(0, 8)}…'
+                                  : uid,
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      onSelected: (loja) {
+        final uid = loja['uid'] as String;
+        setState(() => _lojaUidSelecionado = uid);
+        _carregarPedidosDaLoja(uid);
+      },
+    );
+
+    if (_lojaUidSelecionado != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          campo,
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 13, color: Color(0xFF16A34A)),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    'UID: $_lojaUidSelecionado',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF16A34A),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return campo;
+  }
+
+  Widget _buildBuscaPedidoAutocomplete() {
+    if (_lojaUidSelecionado == null) {
+      return _campoEstorno(
+        controller: _ctrlPedidoPesquisa,
+        label: 'Selecione uma loja primeiro',
+        icon: Icons.receipt_long_rounded,
+        enabled: false,
+      );
+    }
+
+    if (_pedidosLojaCarregando) {
+      return Container(
+        height: 48,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8F7FC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            const Icon(Icons.receipt_long_rounded, size: 18, color: Colors.grey),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: PainelAdminTheme.roxo,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Carregando pedidos...',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13, color: Colors.grey.shade500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_pedidosLojaCache.isEmpty) {
+      return _campoEstorno(
+        controller: _ctrlPedidoPesquisa,
+        label: 'Nenhum pedido encontrado',
+        icon: Icons.receipt_long_rounded,
+        enabled: false,
+      );
+    }
+
+    String _labelStatus(String s) {
+      switch (s) {
+        case 'entregue': return 'Entregue';
+        case 'pendente': return 'Pendente';
+        case 'em_preparo': return 'Preparando';
+        case 'cancelado': return 'Cancelado';
+        case 'aguardando_pagamento': return 'Aguard. Pgto';
+        case 'aguardando_entregador': return 'Aguard. Entregador';
+        case 'saiu_para_entrega': return 'Em rota';
+        default: return s.replaceAll('_', ' ');
+      }
+    }
+
+    Color _corStatus(String s) {
+      switch (s) {
+        case 'entregue': return const Color(0xFF16A34A);
+        case 'cancelado': return const Color(0xFFDC2626);
+        case 'pendente': return const Color(0xFFF59E0B);
+        case 'em_preparo': return const Color(0xFF2563EB);
+        case 'saiu_para_entrega': return const Color(0xFF7C3AED);
+        default: return Colors.grey;
+      }
+    }
+
+    final campo = Autocomplete<Map<String, dynamic>>(
+      displayStringForOption: (p) => '#${(p['id'] as String).substring(0, (p['id'] as String).length.clamp(0, 5)).toUpperCase()}',
+      fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+        if (_pedidoIdSelecionado != null && controller.text.isEmpty) {
+          final id = _pedidoIdSelecionado!;
+          controller.text = '#${id.substring(0, id.length.clamp(0, 5)).toUpperCase()}';
+        }
+        _ctrlPedidoPesquisa = controller;
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          onSubmitted: (_) => onSubmit(),
+          decoration: InputDecoration(
+            labelText: 'Buscar pedido (${_pedidosLojaCache.length} pedidos)',
+            hintText: 'Digite ID, nome do cliente ou status...',
+            prefixIcon: const Icon(Icons.receipt_long_rounded, size: 18),
+            suffixIcon: _pedidoIdSelecionado != null
+                ? IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    onPressed: () {
+                      controller.clear();
+                      setState(() {
+                        _pedidoIdSelecionado = null;
+                        _pedidoValorSelecionado = null;
+                        _ctrlEstornoValor.clear();
+                      });
+                    },
+                  )
+                : null,
+            filled: true,
+            fillColor: const Color(0xFFF8F7FC),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(
+                color: _pedidoIdSelecionado != null
+                    ? const Color(0xFF16A34A)
+                    : Colors.grey.shade300,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFF7C3AED), width: 1.5),
+            ),
+            labelStyle: GoogleFonts.plusJakartaSans(fontSize: 13),
+            hintStyle: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5, color: Colors.grey.shade400),
+          ),
+          style: GoogleFonts.plusJakartaSans(fontSize: 13),
+        );
+      },
+      optionsBuilder: (textEditingValue) {
+        return _filtrarPedidos(textEditingValue.text);
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            color: Colors.white,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320, maxWidth: 480),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                shrinkWrap: true,
+                itemCount: options.length,
+                separatorBuilder: (_, __) =>
+                    const Divider(height: 1, indent: 14, endIndent: 14),
+                itemBuilder: (context, index) {
+                  final ped = options.elementAt(index);
+                  final id = ped['id'] as String;
+                  final status = ped['status'] as String;
+                  final cliente = ped['cliente'] as String;
+                  final total = ped['total'] as double;
+                  final data = ped['data'] as DateTime?;
+                  final dataFmt = data != null
+                      ? DateFormat('dd/MM/yy HH:mm').format(data)
+                      : '';
+                  return InkWell(
+                    onTap: () => onSelected(ped),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: _corStatus(status).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(Icons.receipt_long_rounded,
+                                size: 17, color: _corStatus(status)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      '#${id.substring(0, id.length.clamp(0, 5)).toUpperCase()}',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF1E1B4B),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _corStatus(status).withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        _labelStatus(status),
+                                        style: GoogleFonts.plusJakartaSans(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: _corStatus(status),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${cliente.isNotEmpty ? cliente : 'Cliente'} • $dataFmt',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'R\$ ${total.toStringAsFixed(2)}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF1E1B4B),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      onSelected: (ped) {
+        final total = ped['total'] as double;
+        setState(() {
+          _pedidoIdSelecionado = ped['id'] as String;
+          _pedidoValorSelecionado = total;
+          _ctrlEstornoValor.text = total.toStringAsFixed(2);
+        });
+      },
+    );
+
+    if (_pedidoIdSelecionado != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          campo,
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 13, color: Color(0xFF16A34A)),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    'Pedido: $_pedidoIdSelecionado • Valor: R\$ ${_pedidoValorSelecionado?.toStringAsFixed(2) ?? '0.00'}',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF16A34A),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return campo;
+  }
+
+  Widget _linhaResumoEstorno(IconData icon, String label, String valor) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: Colors.grey.shade500),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              valor,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5, fontWeight: FontWeight.w700, color: const Color(0xFF1E1B4B),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _campoEstorno({
     required TextEditingController controller,
     required String label,
     required IconData icon,
+    bool enabled = true,
   }) {
     return TextField(
       controller: controller,
+      enabled: enabled,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon, size: 18),

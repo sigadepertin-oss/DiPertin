@@ -527,6 +527,36 @@ article.card:hover .card__text {
   display: none !important;
 }
 
+.depoimentos__slider {
+  overflow: hidden;
+  width: 100%;
+}
+
+.depoimentos__slider[hidden] {
+  display: none !important;
+}
+
+.depoimentos__track {
+  display: flex;
+  gap: 1rem;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.depoimentos__track--static {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.depoimentos__track .testimonial {
+  flex: 0 0 min(320px, 82vw);
+}
+
+.depoimentos__track--static .testimonial {
+  flex: initial;
+}
+
 .testimonial {
   margin: 0; padding: 2rem;
   background: var(--bg-alt); border-radius: var(--radius);
@@ -560,6 +590,18 @@ article.card:hover .card__text {
 .testimonial__info strong { display: block; color: var(--ink); font-weight: 600; }
 .testimonial__info span { font-size: .78rem; }
 .testimonial__stars { color: var(--primary); letter-spacing: .04em; font-style: normal; }
+
+@media (max-width: 1023px) {
+  .depoimentos__track--static {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .depoimentos__track--static {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* ── FAQ ──────────────────────────────────────────────────────── */
 

@@ -31,11 +31,14 @@ class _VagasScreenState extends State<VagasScreen> {
 
   List<QueryDocumentSnapshot> _filtrar(List<QueryDocumentSnapshot> docs) {
     final agora = DateTime.now();
+    final limite3Dias = agora.subtract(const Duration(days: 3));
     var validas = docs.where((d) {
       final data = d.data() as Map<String, dynamic>;
       if (data['ativo'] != true) return false;
-      final venc = data['data_vencimento'];
-      if (venc is Timestamp && venc.toDate().isBefore(agora)) return false;
+      final tsFim = data['data_fim'] as Timestamp?;
+      final tsVenc = data['data_vencimento'] as Timestamp?;
+      final venc = tsFim?.toDate() ?? tsVenc?.toDate();
+      if (venc != null && venc.isBefore(limite3Dias)) return false;
       return true;
     }).toList();
 

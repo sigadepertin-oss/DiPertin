@@ -89,7 +89,32 @@ class _EventosScreenState extends State<EventosScreen> {
             );
           }
 
-          var eventos = snapshot.data!.docs;
+          final agora = DateTime.now();
+          final limite3Dias = agora.subtract(const Duration(days: 3));
+          var eventos = snapshot.data!.docs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            final tsFim = data['data_fim'] as Timestamp?;
+            final tsVenc = data['data_vencimento'] as Timestamp?;
+            final venc = tsFim?.toDate() ?? tsVenc?.toDate();
+            if (venc == null) return true;
+            return venc.isAfter(limite3Dias);
+          }).toList();
+
+          if (eventos.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.event_busy, size: 80, color: Colors.grey[300]),
+                  const SizedBox(height: 20),
+                  const Text(
+                    "Nenhum evento programado.",
+                    style: TextStyle(color: Colors.grey, fontSize: 16),
+                  ),
+                ],
+              ),
+            );
+          }
 
           return ListView.builder(
             padding: const EdgeInsets.all(10),

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -53,6 +54,8 @@ const _kStatus = <String, _StatusVisual>{
     Color(0xFFFECACA),
   ),
 };
+
+enum _MaisAcoesEntregador { documentos, planoTaxa, bloquear }
 
 class EntregadoresScreen extends StatefulWidget {
   const EntregadoresScreen({super.key});
@@ -1136,6 +1139,22 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
     return _str(d['url_foto_veiculo']);
   }
 
+  Future<String> _resolverUrlDocumento(String rawUrl) async {
+    final url = rawUrl.trim();
+    if (url.isEmpty) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    try {
+      if (url.startsWith('gs://')) {
+        return await FirebaseStorage.instance.refFromURL(url).getDownloadURL();
+      }
+      final path = url.startsWith('/') ? url.substring(1) : url;
+      return await FirebaseStorage.instance.ref(path).getDownloadURL();
+    } catch (_) {
+      // Mantém o valor original para o fallback de erro visual no card.
+      return url;
+    }
+  }
+
   Widget _buildEntregadorCard(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
     String status,
@@ -1286,22 +1305,11 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                       onTap: () => _desbloquearEntregador(doc.id, nome)),
                   const SizedBox(height: 8),
                 ],
-                _actionBtn(Icons.description_outlined, 'Documentos',
-                    const Color(0xFF3B82F6),
-                    onTap: () => _mostrarDocumentosModal(dados)),
-                const SizedBox(height: 8),
-                if (status == 'aprovado' && !bloqOp) ...[
-                  _actionBtn(Icons.tune_rounded, 'Plano/Taxa',
-                      PainelAdminTheme.roxo,
-                      onTap: () => _atribuirPlanoModal(
-                          doc.id, nome, planoId?.toString(), cidade, veiculo)),
-                  const SizedBox(height: 8),
-                  _actionBtn(Icons.block_rounded, 'Bloquear',
-                      const Color(0xFFDC2626),
-                      onTap: () =>
-                          _mostrarModalBloqueioEntregador(doc.id, nome)),
-                ],
                 if (status == 'pendente') ...[
+                  _actionBtn(Icons.description_outlined, 'Documentos',
+                      const Color(0xFF3B82F6),
+                      onTap: () => _mostrarDocumentosModal(dados)),
+                  const SizedBox(height: 8),
                   _actionBtn(
                       Icons.check_circle_outline_rounded,
                       'Aprovar',
@@ -1314,20 +1322,133 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                       const Color(0xFFDC2626),
                       onTap: () =>
                           _mostrarModalRecusaEntregador(doc.id, nome)),
-                ],
-                if (status == 'bloqueado' && !bloqOp) ...[
-                  _actionBtn(
-                      Icons.check_circle_outline_rounded,
-                      'Aprovar',
-                      const Color(0xFF059669),
-                      filled: true,
-                      onTap: () =>
-                          _alterarStatusEntregador(doc.id, 'aprovado')),
-                  const SizedBox(height: 8),
+                ] else ...[
+                  _buildMaisAcoesEntregadorMenu(
+                    doc: doc,
+                    dados: dados,
+                    nomeEntregador: nome,
+                    planoId: planoId,
+                    cidade: cidade,
+                    veiculo: veiculo,
+                    incluirPlanoTaxaEBloquear:
+                        status == 'aprovado' && !bloqOp,
+                  ),
                 ],
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMaisAcoesEntregadorMenu({
+    required QueryDocumentSnapshot doc,
+    required Map<String, dynamic> dados,
+    required String nomeEntregador,
+    required dynamic planoId,
+    required String cidade,
+    required String veiculo,
+    required bool incluirPlanoTaxaEBloquear,
+  }) {
+    final textStyle = GoogleFonts.plusJakartaSans(
+      fontSize: 14,
+      fontWeight: FontWeight.w600,
+      color: PainelAdminTheme.dashboardInk,
+    );
+    return PopupMenuButton<_MaisAcoesEntregador>(
+      tooltip: 'Mais ações',
+      offset: const Offset(0, 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      color: Colors.white,
+      elevation: 10,
+      shadowColor: Colors.black.withValues(alpha: 0.12),
+      surfaceTintColor: Colors.transparent,
+      onSelected: (acao) {
+        switch (acao) {
+          case _MaisAcoesEntregador.documentos:
+            _mostrarDocumentosModal(dados);
+            break;
+          case _MaisAcoesEntregador.planoTaxa:
+            _atribuirPlanoModal(
+              doc.id,
+              nomeEntregador,
+              planoId?.toString(),
+              cidade,
+              veiculo,
+            );
+            break;
+          case _MaisAcoesEntregador.bloquear:
+            _mostrarModalBloqueioEntregador(doc.id, nomeEntregador);
+            break;
+        }
+      },
+      itemBuilder: (context) {
+        final entries = <PopupMenuEntry<_MaisAcoesEntregador>>[
+          PopupMenuItem<_MaisAcoesEntregador>(
+            value: _MaisAcoesEntregador.documentos,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(Icons.description_outlined,
+                    size: 20, color: Color(0xFF3B82F6)),
+                const SizedBox(width: 12),
+                Text('Documentos', style: textStyle),
+              ],
+            ),
+          ),
+        ];
+        if (incluirPlanoTaxaEBloquear) {
+          entries.add(const PopupMenuDivider(height: 1));
+          entries.add(
+            PopupMenuItem<_MaisAcoesEntregador>(
+              value: _MaisAcoesEntregador.planoTaxa,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.tune_rounded,
+                      size: 20, color: PainelAdminTheme.roxo),
+                  const SizedBox(width: 12),
+                  Text('Plano/Taxa', style: textStyle),
+                ],
+              ),
+            ),
+          );
+          entries.add(
+            PopupMenuItem<_MaisAcoesEntregador>(
+              value: _MaisAcoesEntregador.bloquear,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.block_rounded,
+                      size: 20, color: Color(0xFFDC2626)),
+                  const SizedBox(width: 12),
+                  Text('Bloquear', style: textStyle),
+                ],
+              ),
+            ),
+          );
+        }
+        return entries;
+      },
+      child: Container(
+        width: 42,
+        height: 42,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
+        child: const Icon(
+          Icons.more_vert_rounded,
+          size: 22,
+          color: Color(0xFF64748B),
         ),
       ),
     );
@@ -1454,6 +1575,10 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
 
   void _mostrarDocumentosModal(Map<String, dynamic> dados) {
     final nome = _str(dados['nome'], 'Entregador sem nome');
+    final docPessoalFuture =
+        _resolverUrlDocumento(_str(dados['url_doc_pessoal']));
+    final crlvFuture = _resolverUrlDocumento(_str(dados['url_crlv']));
+    final fotoVeiculoFuture = _resolverUrlDocumento(_urlFotoVeiculo(dados));
 
     showDialog(
       context: context,
@@ -1537,11 +1662,15 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                           ),
                         ),
                         const SizedBox(height: 24),
-                        _buildDoc('Documento pessoal (CNH/RG)',
-                            _str(dados['url_doc_pessoal'])),
-                        _buildDoc('CRLV / documento do veículo',
-                            _str(dados['url_crlv'])),
-                        _buildDoc('Foto do veículo', _urlFotoVeiculo(dados)),
+                        _buildDocAsync(
+                          'Documento pessoal (CNH/RG)',
+                          docPessoalFuture,
+                        ),
+                        _buildDocAsync(
+                          'CRLV / documento do veículo',
+                          crlvFuture,
+                        ),
+                        _buildDocAsync('Foto do veículo', fotoVeiculoFuture),
                       ]),
                 ),
               ),
@@ -1549,6 +1678,50 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildDocAsync(String titulo, Future<String> urlFuture) {
+    return FutureBuilder<String>(
+      future: urlFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titulo,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                    color: PainelAdminTheme.dashboardInk,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _docCardShell(
+                  child: SizedBox(
+                    height: _docPreviewAltura,
+                    child: Center(
+                      child: SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: PainelAdminTheme.roxo,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        return _buildDoc(titulo, snapshot.data?.trim() ?? '');
+      },
     );
   }
 

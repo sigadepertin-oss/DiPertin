@@ -99,10 +99,63 @@
     }
   }
 
+  function ativarSlider(root) {
+    if (!root) return;
+    var slider = root.closest("[data-depoimentos-slider]");
+    if (!slider) return;
+
+    var cards = Array.prototype.slice.call(root.children);
+    if (cards.length < 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      root.classList.add("depoimentos__track--static");
+      slider.hidden = false;
+      return;
+    }
+
+    cards.forEach(function (card) {
+      root.appendChild(card.cloneNode(true));
+    });
+
+    slider.hidden = false;
+    var metade = root.scrollWidth / 2;
+    var pos = 0;
+    var ultimoTs = 0;
+    var pausado = false;
+    var pxPorSegundo = 28;
+
+    function frame(ts) {
+      if (!ultimoTs) ultimoTs = ts;
+      var dt = (ts - ultimoTs) / 1000;
+      ultimoTs = ts;
+
+      if (!pausado) {
+        pos += pxPorSegundo * dt;
+        if (pos >= metade) pos -= metade;
+        root.style.transform = "translate3d(" + (-pos).toFixed(2) + "px,0,0)";
+      }
+      window.requestAnimationFrame(frame);
+    }
+
+    slider.addEventListener("mouseenter", function () {
+      pausado = true;
+    });
+    slider.addEventListener("mouseleave", function () {
+      pausado = false;
+    });
+    slider.addEventListener("focusin", function () {
+      pausado = true;
+    });
+    slider.addEventListener("focusout", function () {
+      pausado = false;
+    });
+
+    window.requestAnimationFrame(frame);
+  }
+
   function init() {
     var root = document.querySelector("[data-depoimentos-root]");
     var statusEl = document.querySelector("[data-depoimentos-status]");
     var vazioEl = document.querySelector("[data-depoimentos-vazio]");
+    var slider = document.querySelector("[data-depoimentos-slider]");
     var cfg = window.DIPERTIN_SITE || {};
     var url = cfg.avaliacoesSiteUrl;
 
@@ -118,6 +171,7 @@
 
     if (!url || typeof url !== "string") {
       esconderStatus();
+      if (slider) slider.hidden = true;
       mostrarVazio(vazioEl, root, MSG_ERRO);
       return;
     }
@@ -132,10 +186,12 @@
       .then(function (data) {
         esconderStatus();
         if (!data || !data.ok || !Array.isArray(data.avaliacoes)) {
+          if (slider) slider.hidden = true;
           mostrarVazio(vazioEl, root, MSG_ERRO);
           return;
         }
         if (data.avaliacoes.length === 0) {
+          if (slider) slider.hidden = true;
           mostrarVazio(vazioEl, root, MSG_VAZIO);
           return;
         }
@@ -144,9 +200,11 @@
         data.avaliacoes.forEach(function (item) {
           root.appendChild(montarCard(item));
         });
+        ativarSlider(root);
       })
       .catch(function () {
         esconderStatus();
+        if (slider) slider.hidden = true;
         mostrarVazio(vazioEl, root, MSG_ERRO);
       });
   }

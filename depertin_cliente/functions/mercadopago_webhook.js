@@ -1563,3 +1563,172 @@ exports.cancelarPedidoPixExpirado = onCall(
         return { ok: true };
     }
 );
+
+/**
+ * Callable v2: estorno manual do painel (master/staff).
+ * Faz refund via API Mercado Pago + debita saldo da loja + notifica cliente.
+ */
+exports.processarEstornoPainel = onCall(
+    { region: "us-central1", enforceAppCheck: false },
+    async (request) => {
+        const db = admin.firestore();
+        const uid = request.auth?.uid;
+        if (!uid) throw new HttpsError("unauthenticated", "Login necessário.");
+
+        const userSnap = await db.collection("users").doc(uid).get();
+        const userData = userSnap.data() || {};
+        const role = String(userData.role || userData.tipoUsuario || "").toLowerCase();
+        if (role !== "master" && role !== "master_city" && role !== "staff") {
+            throw new HttpsError("permission-denied", "Sem permissão para processar estornos.");
+        }
+
+        const { lojaId, pedidoId, valor, motivo } = request.data || {};
+        if (!lojaId || !valor || valor <= 0 || !motivo) {
+            throw new HttpsError("invalid-argument", "lojaId, valor e motivo são obrigatórios.");
+        }
+
+        const pedidoRef = pedidoId ? db.collection("pedidos").doc(pedidoId) : null;
+        let pedido = null;
+        let mpPaymentId = null;
+        let clienteId = null;
+        let valorTotal = 0;
+
+        if (pedidoRef) {
+            const pedSnap = await pedidoRef.get();
+            if (!pedSnap.exists) {
+                throw new HttpsError("not-found", "Pedido não encontrado.");
+            }
+            pedido = pedSnap.data();
+            mpPaymentId = String(pedido.mp_payment_id || "").trim() || null;
+            clienteId = String(pedido.cliente_id || "").trim() || null;
+            valorTotal = Number(pedido.total_produtos || pedido.subtotal || pedido.total || 0);
+
+            if (!mpPaymentId) {
+                const liderRef = String(pedido.checkout_cobranca_pedido_mp_id || "").trim();
+                if (liderRef) {
+                    const liderSnap = await db.collection("pedidos").doc(liderRef).get();
+                    if (liderSnap.exists) {
+                        mpPaymentId = String(liderSnap.data().mp_payment_id || "").trim() || null;
+                    }
+                }
+            }
+        }
+
+        if (!mpPaymentId) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Pedido sem payment_id do Mercado Pago. Estorno automático não é possível para este pedido.",
+            );
+        }
+
+        const accessToken = await getMercadoPagoAccessToken();
+        if (!accessToken) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Gateway Mercado Pago não configurado ou inativo.",
+            );
+        }
+
+        const parcial = valor < valorTotal;
+        let refundResult;
+        try {
+            if (parcial) {
+                refundResult = await criarEstornoParcialMp(accessToken, mpPaymentId, valor);
+            } else {
+                refundResult = await criarEstornoTotalMp(accessToken, mpPaymentId);
+            }
+        } catch (err) {
+            console.error("[estorno-painel] Erro MP refund:", err.message, err.body);
+            const mpMsg = err.body?.message || err.message || "Erro desconhecido";
+            throw new HttpsError(
+                "internal",
+                `Mercado Pago recusou o estorno: ${mpMsg}`,
+            );
+        }
+
+        const batch = db.batch();
+
+        batch.set(db.collection("estornos").doc(), {
+            loja_id: lojaId,
+            pedido_id: pedidoId || "",
+            valor: valor,
+            motivo: motivo,
+            status: "processado",
+            feito_por: uid,
+            mp_payment_id: mpPaymentId,
+            mp_refund_id: refundResult?.id || null,
+            mp_refund_status: refundResult?.status || null,
+            parcial: parcial,
+            data_estorno: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        batch.update(db.collection("users").doc(lojaId), {
+            saldo: admin.firestore.FieldValue.increment(-valor),
+        });
+
+        if (pedidoRef) {
+            batch.update(pedidoRef, {
+                estorno_processado: true,
+                estorno_valor: valor,
+                estorno_parcial: parcial,
+                estorno_data: admin.firestore.FieldValue.serverTimestamp(),
+                estorno_motivo: motivo,
+            });
+        }
+
+        await batch.commit();
+
+        const pedidoCurto = pedidoId
+            ? `#${String(pedidoId).substring(0, 5).toUpperCase()}`
+            : "";
+
+        if (clienteId) {
+            try {
+                const { token, ok } = await notificationDispatcher.obterTokenValidado(
+                    db, clienteId, "cliente",
+                );
+                if (ok && token) {
+                    await admin.messaging().send({
+                        notification: {
+                            title: "Estorno confirmado",
+                            body: `O estorno do pedido ${pedidoCurto} foi efetuado com sucesso. O valor de R$ ${Number(valor).toFixed(2)} será devolvido à sua conta.`,
+                        },
+                        android: {
+                            priority: "high",
+                            notification: {
+                                channelId: "high_importance_channel",
+                                sound: "default",
+                                defaultVibrateTimings: true,
+                                visibility: "public",
+                            },
+                        },
+                        apns: {
+                            headers: { "apns-priority": "10", "apns-push-type": "alert" },
+                            payload: { aps: { sound: "default", badge: 1 } },
+                        },
+                        data: notificationDispatcher.dataSoStrings({
+                            tipoNotificacao: "estorno_pedido",
+                            segmento: "cliente",
+                            pedido_id: String(pedidoId || ""),
+                            cliente_id: String(clienteId),
+                            valor_estorno: String(valor),
+                        }),
+                        token,
+                    });
+                    console.log(`[estorno-painel] Notificação enviada → cliente ${clienteId}`);
+                }
+            } catch (fcmErr) {
+                console.warn("[estorno-painel] FCM falhou (estorno já processado):", fcmErr.message);
+            }
+        }
+
+        return {
+            ok: true,
+            parcial,
+            mp_refund_id: refundResult?.id || null,
+            mp_refund_status: refundResult?.status || null,
+            cliente_notificado: !!clienteId,
+            pedido_curto: pedidoCurto,
+        };
+    }
+);

@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -327,11 +327,6 @@ class _BannersScreenState extends State<BannersScreen> {
                                                 fit: BoxFit.cover,
                                                 width: double.infinity,
                                                 height: 168,
-                                                webHtmlElementStrategy: kIsWeb
-                                                    ? WebHtmlElementStrategy
-                                                        .prefer
-                                                    : WebHtmlElementStrategy
-                                                        .never,
                                                 errorBuilder: (_, _, _) =>
                                                     _bannerImageErrorPlaceholder(),
                                               ),
@@ -1050,9 +1045,6 @@ class _BannersScreenState extends State<BannersScreen> {
                                   Image.network(
                                     imageUrl,
                                     fit: BoxFit.cover,
-                                    webHtmlElementStrategy: kIsWeb
-                                        ? WebHtmlElementStrategy.prefer
-                                        : WebHtmlElementStrategy.never,
                                     errorBuilder: (_, _, _) => Container(
                                       color: const Color(0xFFF1F5F9),
                                       alignment: Alignment.center,

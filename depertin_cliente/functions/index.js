@@ -609,6 +609,7 @@ exports.mpProcessarPagamentoCartao = mercadopago.mpProcessarPagamentoCartao;
 exports.estornarPagamentoPedidoCancelado = mercadopago.estornarPagamentoPedidoCancelado;
 exports.cancelarPedidosPixExpirados = mercadopago.cancelarPedidosPixExpirados;
 exports.cancelarPedidoPixExpirado = mercadopago.cancelarPedidoPixExpirado;
+exports.processarEstornoPainel = mercadopago.processarEstornoPainel;
 
 function motivoRecusaIndicaOperacionalJs(motivo) {
     const s = String(motivo || "").toLowerCase();
@@ -1111,3 +1112,61 @@ exports.enviarCandidaturaVaga = candidaturaVaga.enviarCandidaturaVaga;
 // Validação de cupons (callable para o app)
 const validarCupomModule = require("./validar_cupom");
 exports.validarCupom = validarCupomModule.validarCupom;
+
+// ==========================================
+// DESATIVAÇÃO AUTOMÁTICA DE PUBLICAÇÕES VENCIDAS (3+ dias)
+// ==========================================
+exports.desativarPublicacoesVencidas = functions.pubsub
+    .schedule("every day 04:00")
+    .timeZone("America/Sao_Paulo")
+    .onRun(async () => {
+        const db = admin.firestore();
+        const colecoes = [
+            { nome: "servicos_destaque", campoVenc: "data_fim" },
+            { nome: "telefones_premium", campoVenc: "data_fim" },
+            { nome: "vagas", campoVenc: "data_fim" },
+            { nome: "eventos", campoVenc: "data_fim" },
+            { nome: "achados", campoVenc: "data_fim" },
+        ];
+
+        const limite = new Date();
+        limite.setDate(limite.getDate() - 3);
+
+        let totalDesativados = 0;
+
+        for (const col of colecoes) {
+            const snap = await db.collection(col.nome)
+                .where("ativo", "==", true)
+                .get();
+            if (snap.empty) continue;
+
+            let batch = db.batch();
+            let ops = 0;
+
+            for (const doc of snap.docs) {
+                const dados = doc.data();
+                const tsFim = dados[col.campoVenc] || dados["data_vencimento"];
+                if (!tsFim || !tsFim.toDate) continue;
+                const venc = tsFim.toDate();
+                if (venc >= limite) continue;
+
+                batch.update(doc.ref, {
+                    ativo: false,
+                    desativado_automaticamente: true,
+                    desativado_em: admin.firestore.FieldValue.serverTimestamp(),
+                });
+                ops++;
+                totalDesativados++;
+                if (ops >= 400) {
+                    await batch.commit();
+                    batch = db.batch();
+                    ops = 0;
+                }
+            }
+            if (ops > 0) {
+                await batch.commit();
+            }
+        }
+        console.log(`[publicacoes] Desativadas automaticamente: ${totalDesativados}`);
+        return null;
+    });

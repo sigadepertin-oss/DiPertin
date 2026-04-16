@@ -177,24 +177,20 @@ class _AchadosScreenState extends State<AchadosScreen> {
             return _buildListaVazia(); // Movi a UI vazia para não poluir
           }
 
-          // ===== NOVO FILTRO DE VALIDADE (Esconde os vencidos) =====
-          DateTime agora = DateTime.now();
-          var itensAtivosEValidos = snapshot.data!.docs.where((doc) {
+          final agora = DateTime.now();
+          final limite3Dias = agora.subtract(const Duration(days: 3));
+          var itens = snapshot.data!.docs.where((doc) {
             var data = doc.data() as Map<String, dynamic>;
-            if (data['data_vencimento'] == null) {
-              return true; // Mostra os antigos por segurança
-            }
-
-            DateTime vencimento = (data['data_vencimento'] as Timestamp)
-                .toDate();
-            return vencimento.isAfter(agora);
+            final tsFim = data['data_fim'] as Timestamp?;
+            final tsVenc = data['data_vencimento'] as Timestamp?;
+            final venc = tsFim?.toDate() ?? tsVenc?.toDate();
+            if (venc == null) return true;
+            return venc.isAfter(limite3Dias);
           }).toList();
 
-          if (itensAtivosEValidos.isEmpty) {
+          if (itens.isEmpty) {
             return _buildListaVazia();
           }
-
-          var itens = snapshot.data!.docs;
 
           return ListView.builder(
             padding: const EdgeInsets.all(15),

@@ -5,7 +5,7 @@
 window.DIPERTIN_SITE = {
   siteBaseUrl: "https://www.dipertin.com.br",
 
-  emailContato: "site@dipertin.com.br",
+  emailContato: "falecom@dipertin.com.br",
 
   /** Endpoint da Cloud Function para envio do formulário de contato */
   formEndpoint: "https://us-central1-depertin-f940f.cloudfunctions.net/enviarContatoSite",

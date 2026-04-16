@@ -252,6 +252,126 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     );
   }
 
+  Widget _buildSecaoFinanceira({
+    required TextEditingController valorC,
+    required String modalidade,
+    required DateTime dtInicio,
+    required DateTime dtFim,
+    required ValueChanged<String> onModalidade,
+    required ValueChanged<DateTime> onInicio,
+    required ValueChanged<DateTime> onFim,
+  }) {
+    String fmt(DateTime d) =>
+        '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text("Valor e Período", style: TextStyle(fontWeight: FontWeight.bold, color: diPertinRoxo, fontSize: 14)),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: valorC,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: modalidade == 'diario' ? "Valor/dia (R\$)" : "Valor/mês (R\$)",
+                  border: const OutlineInputBorder(),
+                  prefixText: "R\$ ",
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'diario', label: Text('Dia')),
+                ButtonSegment(value: 'mensal', label: Text('Mês')),
+              ],
+              selected: {modalidade},
+              onSelectionChanged: (v) => onModalidade(v.first),
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: diPertinLaranja,
+                selectedForegroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final p = await showDatePicker(context: context, initialDate: dtInicio, firstDate: DateTime(2024), lastDate: DateTime(2030));
+                  if (p != null) onInicio(p);
+                },
+                icon: const Icon(Icons.calendar_today, size: 16),
+                label: Text("Início: ${fmt(dtInicio)}"),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final p = await showDatePicker(context: context, initialDate: dtFim, firstDate: DateTime(2024), lastDate: DateTime(2030));
+                  if (p != null) onFim(p);
+                },
+                icon: const Icon(Icons.event_available, size: 16),
+                label: Text("Fim: ${fmt(dtFim)}"),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _aplicarFinanceiro(Map<String, dynamic> upd, TextEditingController valorC, String modalidade, DateTime dtInicio, DateTime dtFim) {
+    final val = double.tryParse(valorC.text.replaceAll(',', '.')) ?? 0;
+    if (val <= 0) return;
+    int dias = dtFim.difference(dtInicio).inDays;
+    if (dias <= 0) dias = 1;
+    double total;
+    if (modalidade == 'mensal') {
+      final meses = (dias / 30).ceil().clamp(1, 9999);
+      total = val * meses;
+      upd['valor_mensal'] = val;
+    } else {
+      total = val * dias;
+      upd['valor_diario'] = val;
+    }
+    upd['modalidade_valor'] = modalidade;
+    upd['data_inicio'] = Timestamp.fromDate(dtInicio);
+    upd['data_fim'] = Timestamp.fromDate(dtFim);
+    upd['valor_total'] = total;
+    upd['gera_receita'] = true;
+  }
+
+  Future<void> _registrarReceitaSeValor(TextEditingController valorC, String modalidade, DateTime dtInicio, DateTime dtFim, String tipo, String titulo, String pagador) async {
+    final val = double.tryParse(valorC.text.replaceAll(',', '.')) ?? 0;
+    if (val <= 0) return;
+    int dias = dtFim.difference(dtInicio).inDays;
+    if (dias <= 0) dias = 1;
+    double total;
+    if (modalidade == 'mensal') {
+      total = val * (dias / 30).ceil().clamp(1, 9999);
+    } else {
+      total = val * dias;
+    }
+    await FirebaseFirestore.instance.collection('receitas_app').add({
+      'tipo_receita': tipo,
+      'titulo_referencia': titulo,
+      'nome_pagador': pagador,
+      'valor_total': total,
+      'valor_unitario': val,
+      'modalidade_valor': modalidade,
+      'data_inicio': Timestamp.fromDate(dtInicio),
+      'data_fim': Timestamp.fromDate(dtFim),
+      'qtd_dias': dias,
+      'data_registro': FieldValue.serverTimestamp(),
+    });
+  }
+
   void _editarVaga(String id, Map<String, dynamic> dados) {
     final cargoC = TextEditingController(text: dados['cargo'] ?? '');
     final empresaC = TextEditingController(text: dados['empresa'] ?? '');
@@ -259,114 +379,58 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     final descC = TextEditingController(text: dados['descricao'] ?? '');
     final contatoC = TextEditingController(text: dados['contato'] ?? '');
     final emailC = TextEditingController(text: dados['email'] ?? '');
+    final valorC = TextEditingController(text: (dados['valor_diario'] ?? dados['valor_mensal'] ?? '').toString());
+    String modalidade = dados['modalidade_valor']?.toString() ?? 'diario';
+    DateTime dtInicio = dados['data_inicio'] != null ? (dados['data_inicio'] as Timestamp).toDate() : DateTime.now();
+    DateTime dtFim = dados['data_fim'] != null ? (dados['data_fim'] as Timestamp).toDate() : (dados['data_vencimento'] != null ? (dados['data_vencimento'] as Timestamp).toDate() : DateTime.now().add(const Duration(days: 7)));
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Editar Vaga",
-          style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 500,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: cargoC,
-                  decoration: const InputDecoration(
-                    labelText: "Cargo da Vaga",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: empresaC,
-                  decoration: const InputDecoration(
-                    labelText: "Nome da Empresa",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                CampoCidadeBrasilField(
-                  controller: cidadeC,
-                  decoration: const InputDecoration(
-                    labelText: "Cidade",
-                    hintText: "Digite para buscar o município",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descC,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: "Descrição Completa",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: contatoC,
-                  decoration: const InputDecoration(
-                    labelText: "Telefone / Contato",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: emailC,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: "E-mail",
-                    hintText: "exemplo@email.com",
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDlg) => AlertDialog(
+          title: Text("Editar Vaga", style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: cargoC, decoration: const InputDecoration(labelText: "Cargo da Vaga", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: empresaC, decoration: const InputDecoration(labelText: "Nome da Empresa", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  CampoCidadeBrasilField(controller: cidadeC, decoration: const InputDecoration(labelText: "Cidade", hintText: "Digite para buscar", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: descC, maxLines: 3, decoration: const InputDecoration(labelText: "Descrição Completa", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: contatoC, decoration: const InputDecoration(labelText: "Telefone / Contato", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: emailC, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: "E-mail", prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder())),
+                  const Divider(height: 24),
+                  _buildSecaoFinanceira(valorC: valorC, modalidade: modalidade, dtInicio: dtInicio, dtFim: dtFim, onModalidade: (v) => setDlg(() => modalidade = v), onInicio: (d) => setDlg(() => dtInicio = d), onFim: (d) => setDlg(() => dtFim = d)),
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancelar"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final atualizacao = <String, dynamic>{
-                'cargo': cargoC.text.trim(),
-                'empresa': empresaC.text.trim(),
-                'cidade': cidadeC.text.trim(),
-                'descricao': descC.text.trim(),
-                'contato': contatoC.text.trim(),
-              };
-              if (emailC.text.trim().isNotEmpty) {
-                atualizacao['email'] = emailC.text.trim();
-              }
-              await FirebaseFirestore.instance
-                  .collection('vagas')
-                  .doc(id)
-                  .update(atualizacao);
-              if (context.mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Vaga atualizada com sucesso!'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: diPertinLaranja,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+            ElevatedButton(
+              onPressed: () async {
+                final upd = <String, dynamic>{
+                  'cargo': cargoC.text.trim(), 'empresa': empresaC.text.trim(), 'cidade': cidadeC.text.trim(),
+                  'descricao': descC.text.trim(), 'contato': contatoC.text.trim(),
+                };
+                if (emailC.text.trim().isNotEmpty) upd['email'] = emailC.text.trim();
+                _aplicarFinanceiro(upd, valorC, modalidade, dtInicio, dtFim);
+                await FirebaseFirestore.instance.collection('vagas').doc(id).update(upd);
+                await _registrarReceitaSeValor(valorC, modalidade, dtInicio, dtFim, 'Vagas', cargoC.text, dados['nome_dono'] ?? '');
+                if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vaga atualizada!'), backgroundColor: Colors.green)); }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: diPertinLaranja, foregroundColor: Colors.white),
+              child: const Text("Salvar"),
             ),
-            child: const Text("Salvar"),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -377,103 +441,66 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     final cidadeC = TextEditingController(text: dados['cidade'] ?? '');
     final telefoneC = TextEditingController(text: dados['telefone'] ?? '');
     final emailC = TextEditingController(text: dados['email'] ?? '');
+    final valorC = TextEditingController(
+        text: (dados['valor_diario'] ?? dados['valor_mensal'] ?? '').toString());
+    String modalidade = dados['modalidade_valor']?.toString() ?? 'diario';
+    DateTime dtInicio = dados['data_inicio'] != null
+        ? (dados['data_inicio'] as Timestamp).toDate()
+        : DateTime.now();
+    DateTime dtFim = dados['data_fim'] != null
+        ? (dados['data_fim'] as Timestamp).toDate()
+        : DateTime.now().add(const Duration(days: 30));
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Editar Destaque",
-          style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 500,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: tituloC,
-                  decoration: const InputDecoration(
-                    labelText: "Título",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: categoriaC,
-                  decoration: const InputDecoration(
-                    labelText: "Categoria Profissional",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                CampoCidadeBrasilField(
-                  controller: cidadeC,
-                  decoration: const InputDecoration(
-                    labelText: "Cidade",
-                    hintText: "Digite para buscar o município",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: telefoneC,
-                  decoration: const InputDecoration(
-                    labelText: "Telefone / Contato",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: emailC,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: "E-mail",
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDlg) => AlertDialog(
+          title: Text(
+            "Editar Destaque",
+            style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: tituloC, decoration: const InputDecoration(labelText: "Título", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: categoriaC, decoration: const InputDecoration(labelText: "Categoria Profissional", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  CampoCidadeBrasilField(controller: cidadeC, decoration: const InputDecoration(labelText: "Cidade", hintText: "Digite para buscar", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: telefoneC, decoration: const InputDecoration(labelText: "Telefone / Contato", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: emailC, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: "E-mail", prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder())),
+                  const Divider(height: 24),
+                  _buildSecaoFinanceira(valorC: valorC, modalidade: modalidade, dtInicio: dtInicio, dtFim: dtFim, onModalidade: (v) => setDlg(() => modalidade = v), onInicio: (d) => setDlg(() => dtInicio = d), onFim: (d) => setDlg(() => dtFim = d)),
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancelar"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final upd = <String, dynamic>{
-                'titulo': tituloC.text.trim(),
-                'categoria': categoriaC.text.trim(),
-                'cidade': cidadeC.text.trim(),
-                'telefone': telefoneC.text.trim(),
-              };
-              if (emailC.text.trim().isNotEmpty) {
-                upd['email'] = emailC.text.trim();
-              }
-              await FirebaseFirestore.instance
-                  .collection('servicos_destaque')
-                  .doc(id)
-                  .update(upd);
-              if (context.mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Destaque atualizado com sucesso!'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: diPertinLaranja,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+            ElevatedButton(
+              onPressed: () async {
+                final upd = <String, dynamic>{
+                  'titulo': tituloC.text.trim(),
+                  'categoria': categoriaC.text.trim(),
+                  'cidade': cidadeC.text.trim(),
+                  'telefone': telefoneC.text.trim(),
+                };
+                if (emailC.text.trim().isNotEmpty) upd['email'] = emailC.text.trim();
+                _aplicarFinanceiro(upd, valorC, modalidade, dtInicio, dtFim);
+                await FirebaseFirestore.instance.collection('servicos_destaque').doc(id).update(upd);
+                await _registrarReceitaSeValor(valorC, modalidade, dtInicio, dtFim, 'Destaques', tituloC.text, dados['nome_dono'] ?? '');
+                if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Destaque atualizado!'), backgroundColor: Colors.green)); }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: diPertinLaranja, foregroundColor: Colors.white),
+              child: const Text("Salvar"),
             ),
-            child: const Text("Salvar"),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -483,94 +510,51 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     final telefoneC = TextEditingController(text: dados['telefone'] ?? '');
     final cidadeC = TextEditingController(text: dados['cidade'] ?? '');
     final emailC = TextEditingController(text: dados['email'] ?? '');
+    final valorC = TextEditingController(text: (dados['valor_diario'] ?? dados['valor_mensal'] ?? '').toString());
+    String modalidade = dados['modalidade_valor']?.toString() ?? 'diario';
+    DateTime dtInicio = dados['data_inicio'] != null ? (dados['data_inicio'] as Timestamp).toDate() : DateTime.now();
+    DateTime dtFim = dados['data_fim'] != null ? (dados['data_fim'] as Timestamp).toDate() : (dados['data_vencimento'] != null ? (dados['data_vencimento'] as Timestamp).toDate() : DateTime.now().add(const Duration(days: 30)));
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Editar Premium",
-          style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 500,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: tituloC,
-                  decoration: const InputDecoration(
-                    labelText: "Título",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: telefoneC,
-                  decoration: const InputDecoration(
-                    labelText: "Telefone / WhatsApp",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                CampoCidadeBrasilField(
-                  controller: cidadeC,
-                  decoration: const InputDecoration(
-                    labelText: "Cidade",
-                    hintText: "Digite para buscar o município",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: emailC,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: "E-mail",
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDlg) => AlertDialog(
+          title: Text("Editar Premium", style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: tituloC, decoration: const InputDecoration(labelText: "Título", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: telefoneC, decoration: const InputDecoration(labelText: "Telefone / WhatsApp", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  CampoCidadeBrasilField(controller: cidadeC, decoration: const InputDecoration(labelText: "Cidade", hintText: "Digite para buscar", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: emailC, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: "E-mail", prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder())),
+                  const Divider(height: 24),
+                  _buildSecaoFinanceira(valorC: valorC, modalidade: modalidade, dtInicio: dtInicio, dtFim: dtFim, onModalidade: (v) => setDlg(() => modalidade = v), onInicio: (d) => setDlg(() => dtInicio = d), onFim: (d) => setDlg(() => dtFim = d)),
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancelar"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final upd = <String, dynamic>{
-                'titulo': tituloC.text.trim(),
-                'telefone': telefoneC.text.trim(),
-                'cidade': cidadeC.text.trim(),
-              };
-              if (emailC.text.trim().isNotEmpty) {
-                upd['email'] = emailC.text.trim();
-              }
-              await FirebaseFirestore.instance
-                  .collection('telefones_premium')
-                  .doc(id)
-                  .update(upd);
-              if (context.mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Premium atualizado com sucesso!'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: diPertinLaranja,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+            ElevatedButton(
+              onPressed: () async {
+                final upd = <String, dynamic>{'titulo': tituloC.text.trim(), 'telefone': telefoneC.text.trim(), 'cidade': cidadeC.text.trim()};
+                if (emailC.text.trim().isNotEmpty) upd['email'] = emailC.text.trim();
+                _aplicarFinanceiro(upd, valorC, modalidade, dtInicio, dtFim);
+                await FirebaseFirestore.instance.collection('telefones_premium').doc(id).update(upd);
+                await _registrarReceitaSeValor(valorC, modalidade, dtInicio, dtFim, 'Premium', tituloC.text, dados['nome_dono'] ?? '');
+                if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Premium atualizado!'), backgroundColor: Colors.green)); }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: diPertinLaranja, foregroundColor: Colors.white),
+              child: const Text("Salvar"),
             ),
-            child: const Text("Salvar"),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -582,112 +566,58 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     final descC = TextEditingController(text: dados['descricao'] ?? '');
     final linkC = TextEditingController(text: dados['link_ingresso'] ?? '');
     final emailC = TextEditingController(text: dados['email'] ?? '');
+    final valorC = TextEditingController(text: (dados['valor_diario'] ?? dados['valor_mensal'] ?? '').toString());
+    String modalidade = dados['modalidade_valor']?.toString() ?? 'diario';
+    DateTime dtInicio = dados['data_inicio'] != null ? (dados['data_inicio'] as Timestamp).toDate() : DateTime.now();
+    DateTime dtFim = dados['data_fim'] != null ? (dados['data_fim'] as Timestamp).toDate() : DateTime.now().add(const Duration(days: 7));
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Editar Evento",
-          style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 500,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: tituloC,
-                  decoration: const InputDecoration(
-                    labelText: "Título do Evento",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: localC,
-                  decoration: const InputDecoration(
-                    labelText: "Local",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: dataEventoC,
-                  decoration: const InputDecoration(
-                    labelText: "Data do Evento (Ex: 25/Dez às 20h)",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descC,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: "Descrição Completa",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: linkC,
-                  decoration: const InputDecoration(
-                    labelText: "Link do Ingresso (Opcional)",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: emailC,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: "E-mail",
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDlg) => AlertDialog(
+          title: Text("Editar Evento", style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: tituloC, decoration: const InputDecoration(labelText: "Título do Evento", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: localC, decoration: const InputDecoration(labelText: "Local", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: dataEventoC, decoration: const InputDecoration(labelText: "Data do Evento (Ex: 25/Dez às 20h)", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: descC, maxLines: 3, decoration: const InputDecoration(labelText: "Descrição Completa", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: linkC, decoration: const InputDecoration(labelText: "Link do Ingresso (Opcional)", border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: emailC, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: "E-mail", prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder())),
+                  const Divider(height: 24),
+                  _buildSecaoFinanceira(valorC: valorC, modalidade: modalidade, dtInicio: dtInicio, dtFim: dtFim, onModalidade: (v) => setDlg(() => modalidade = v), onInicio: (d) => setDlg(() => dtInicio = d), onFim: (d) => setDlg(() => dtFim = d)),
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancelar"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final upd = <String, dynamic>{
-                'titulo': tituloC.text.trim(),
-                'local': localC.text.trim(),
-                'data_evento': dataEventoC.text.trim(),
-                'descricao': descC.text.trim(),
-                'link_ingresso': linkC.text.trim(),
-              };
-              if (emailC.text.trim().isNotEmpty) {
-                upd['email'] = emailC.text.trim();
-              }
-              await FirebaseFirestore.instance
-                  .collection('eventos')
-                  .doc(id)
-                  .update(upd);
-              if (context.mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Evento atualizado com sucesso!'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: diPertinLaranja,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+            ElevatedButton(
+              onPressed: () async {
+                final upd = <String, dynamic>{
+                  'titulo': tituloC.text.trim(), 'local': localC.text.trim(), 'data_evento': dataEventoC.text.trim(),
+                  'descricao': descC.text.trim(), 'link_ingresso': linkC.text.trim(),
+                };
+                if (emailC.text.trim().isNotEmpty) upd['email'] = emailC.text.trim();
+                _aplicarFinanceiro(upd, valorC, modalidade, dtInicio, dtFim);
+                await FirebaseFirestore.instance.collection('eventos').doc(id).update(upd);
+                await _registrarReceitaSeValor(valorC, modalidade, dtInicio, dtFim, 'Eventos', tituloC.text, dados['nome_dono'] ?? '');
+                if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evento atualizado!'), backgroundColor: Colors.green)); }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: diPertinLaranja, foregroundColor: Colors.white),
+              child: const Text("Salvar"),
             ),
-            child: const Text("Salvar"),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -699,136 +629,61 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     final descC = TextEditingController(text: dados['descricao'] ?? '');
     final contatoC = TextEditingController(text: dados['contato'] ?? '');
     final emailC = TextEditingController(text: dados['email'] ?? '');
+    final valorC = TextEditingController(text: (dados['valor_diario'] ?? dados['valor_mensal'] ?? '').toString());
     bool isPerdido = (dados['tipo'] ?? 'perdido') == 'perdido';
+    String modalidade = dados['modalidade_valor']?.toString() ?? 'diario';
+    DateTime dtInicio = dados['data_inicio'] != null ? (dados['data_inicio'] as Timestamp).toDate() : DateTime.now();
+    DateTime dtFim = dados['data_fim'] != null ? (dados['data_fim'] as Timestamp).toDate() : (dados['data_vencimento'] != null ? (dados['data_vencimento'] as Timestamp).toDate() : DateTime.now().add(const Duration(days: 3)));
 
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            "Editar Achado",
-            style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold),
-          ),
+        builder: (context, setDlg) => AlertDialog(
+          title: Text("Editar Achado", style: TextStyle(color: diPertinRoxo, fontWeight: FontWeight.bold)),
           content: SizedBox(
             width: 500,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
-                    controller: tituloC,
-                    decoration: const InputDecoration(
-                      labelText: "Título",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  TextField(controller: tituloC, decoration: const InputDecoration(labelText: "Título", border: OutlineInputBorder())),
                   const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: RadioListTile(
-                          title: const Text("Perdido"),
-                          value: true,
-                          groupValue: isPerdido,
-                          onChanged: (v) =>
-                              setDialogState(() => isPerdido = v as bool),
-                        ),
-                      ),
-                      Expanded(
-                        child: RadioListTile(
-                          title: const Text("Achado"),
-                          value: false,
-                          groupValue: isPerdido,
-                          onChanged: (v) =>
-                              setDialogState(() => isPerdido = v as bool),
-                        ),
-                      ),
-                    ],
-                  ),
+                  Row(children: [
+                    Expanded(child: RadioListTile(title: const Text("Perdido"), value: true, groupValue: isPerdido, onChanged: (v) => setDlg(() => isPerdido = v as bool))),
+                    Expanded(child: RadioListTile(title: const Text("Achado"), value: false, groupValue: isPerdido, onChanged: (v) => setDlg(() => isPerdido = v as bool))),
+                  ]),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: localC,
-                    decoration: const InputDecoration(
-                      labelText: "Local",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  TextField(controller: localC, decoration: const InputDecoration(labelText: "Local", border: OutlineInputBorder())),
                   const SizedBox(height: 12),
-                  CampoCidadeBrasilField(
-                    controller: cidadeC,
-                    decoration: const InputDecoration(
-                      labelText: "Cidade",
-                      hintText: "Digite para buscar o município",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  CampoCidadeBrasilField(controller: cidadeC, decoration: const InputDecoration(labelText: "Cidade", hintText: "Digite para buscar", border: OutlineInputBorder())),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: descC,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: "Descrição",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  TextField(controller: descC, maxLines: 3, decoration: const InputDecoration(labelText: "Descrição", border: OutlineInputBorder())),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: contatoC,
-                    decoration: const InputDecoration(
-                      labelText: "Telefone / Contato",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  TextField(controller: contatoC, decoration: const InputDecoration(labelText: "Telefone / Contato", border: OutlineInputBorder())),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: emailC,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: "E-mail",
-                      prefixIcon: Icon(Icons.email_outlined),
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+                  TextField(controller: emailC, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: "E-mail", prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder())),
+                  const Divider(height: 24),
+                  _buildSecaoFinanceira(valorC: valorC, modalidade: modalidade, dtInicio: dtInicio, dtFim: dtFim, onModalidade: (v) => setDlg(() => modalidade = v), onInicio: (d) => setDlg(() => dtInicio = d), onFim: (d) => setDlg(() => dtFim = d)),
                 ],
               ),
             ),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancelar"),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
             ElevatedButton(
               onPressed: () async {
                 final upd = <String, dynamic>{
-                  'titulo': tituloC.text.trim(),
-                  'tipo': isPerdido ? 'perdido' : 'encontrado',
-                  'local': localC.text.trim(),
-                  'cidade': cidadeC.text.trim(),
-                  'descricao': descC.text.trim(),
-                  'contato': contatoC.text.trim(),
+                  'titulo': tituloC.text.trim(), 'tipo': isPerdido ? 'perdido' : 'encontrado',
+                  'local': localC.text.trim(), 'cidade': cidadeC.text.trim(),
+                  'descricao': descC.text.trim(), 'contato': contatoC.text.trim(),
                 };
-                if (emailC.text.trim().isNotEmpty) {
-                  upd['email'] = emailC.text.trim();
-                }
-                await FirebaseFirestore.instance
-                    .collection('achados')
-                    .doc(id)
-                    .update(upd);
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Achado atualizado com sucesso!'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
+                if (emailC.text.trim().isNotEmpty) upd['email'] = emailC.text.trim();
+                _aplicarFinanceiro(upd, valorC, modalidade, dtInicio, dtFim);
+                await FirebaseFirestore.instance.collection('achados').doc(id).update(upd);
+                await _registrarReceitaSeValor(valorC, modalidade, dtInicio, dtFim, 'Achados', tituloC.text, dados['nome_dono'] ?? '');
+                if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Achado atualizado!'), backgroundColor: Colors.green)); }
               },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: diPertinLaranja,
-                foregroundColor: Colors.white,
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: diPertinLaranja, foregroundColor: Colors.white),
               child: const Text("Salvar"),
             ),
           ],
@@ -858,9 +713,11 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
     TextEditingController dataLinkC = TextEditingController();
     TextEditingController donoC = TextEditingController();
     TextEditingController valorC = TextEditingController();
-    TextEditingController diasC = TextEditingController(text: "30");
+    String modalidadeValor = 'diario';
+    DateTime dataInicio = DateTime.now();
+    DateTime dataFim = DateTime.now().add(const Duration(days: 30));
 
-    Uint8List? imagemBytes; // Arquivo de imagem para a Web
+    Uint8List? imagemBytes;
     bool isLoading = false;
 
     showDialog(
@@ -895,10 +752,8 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
               try {
                 double valorCobrado =
                     double.tryParse(valorC.text.replaceAll(',', '.')) ?? 0.0;
-                int qtdDias = int.tryParse(diasC.text) ?? 30;
-                DateTime dataCalculadaFim = DateTime.now().add(
-                  Duration(days: qtdDias),
-                );
+                int qtdDias = dataFim.difference(dataInicio).inDays;
+                if (qtdDias <= 0) qtdDias = 1;
 
                 String urlImagem = '';
                 if (imagemBytes != null) {
@@ -914,28 +769,39 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                   'data_criacao': FieldValue.serverTimestamp(),
                 };
 
-                // === A MÁGICA DO LIVRO CAIXA ENTRA AQUI ===
                 if (valorCobrado > 0) {
-                  dados['valor_diario'] = valorCobrado;
                   dados['nome_dono'] = donoC.text.trim();
                   dados['gera_receita'] = true;
+                  dados['modalidade_valor'] = modalidadeValor;
+                  dados['data_inicio'] = Timestamp.fromDate(dataInicio);
+                  dados['data_fim'] = Timestamp.fromDate(dataFim);
 
-                  // 1. Calcula o Total que o cliente pagou (Dias x Valor)
-                  double valorTotalGerado = valorCobrado * qtdDias;
+                  double valorTotalGerado;
+                  if (modalidadeValor == 'mensal') {
+                    dados['valor_mensal'] = valorCobrado;
+                    final meses = (qtdDias / 30).ceil().clamp(1, 9999);
+                    valorTotalGerado = valorCobrado * meses;
+                  } else {
+                    dados['valor_diario'] = valorCobrado;
+                    valorTotalGerado = valorCobrado * qtdDias;
+                  }
+                  dados['valor_total'] = valorTotalGerado;
 
-                  // 2. Salva no nosso Livro Caixa permanente (Coleção 'receitas_app')
                   await FirebaseFirestore.instance
                       .collection('receitas_app')
                       .add({
-                        'tipo_receita':
-                            tipoSelecionado, // Destaque, Premium, Evento...
+                        'tipo_receita': tipoSelecionado,
                         'titulo_referencia': tituloC.text,
                         'nome_pagador': donoC.text.trim(),
                         'valor_total': valorTotalGerado,
+                        'valor_unitario': valorCobrado,
+                        'modalidade_valor': modalidadeValor,
+                        'data_inicio': Timestamp.fromDate(dataInicio),
+                        'data_fim': Timestamp.fromDate(dataFim),
+                        'qtd_dias': qtdDias,
                         'data_registro': FieldValue.serverTimestamp(),
                       });
                 }
-                // ==========================================
 
                 // 3. Molda os dados de acordo com a categoria (Igual estava antes)
                 if (emailC.text.trim().isNotEmpty) {
@@ -964,10 +830,10 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                     'descricao': descC.text,
                     'link_ingresso': contatoC.text,
                     'imagem_url': urlImagem,
-                    'data_fim': Timestamp.fromDate(
-                      DateTime.now().add(const Duration(days: 7)),
-                    ),
                   });
+                  dados['data_fim'] ??= Timestamp.fromDate(
+                    DateTime.now().add(const Duration(days: 7)),
+                  );
                   if (dados['gera_receita'] == null) {
                     dados['gera_receita'] = false;
                   }
@@ -997,9 +863,8 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                     'telefone': contatoC.text,
                     'cidade': cidadeC.text,
                     'tipo_contato': 'whatsapp',
-                    'data_inicio': FieldValue.serverTimestamp(),
-                    'data_vencimento': Timestamp.fromDate(dataCalculadaFim),
                   });
+                  dados['data_vencimento'] ??= Timestamp.fromDate(dataFim);
                   await FirebaseFirestore.instance
                       .collection('telefones_premium')
                       .add(dados);
@@ -1009,8 +874,6 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                     'categoria': empresaLocalC.text,
                     'cidade': cidadeC.text,
                     'telefone': contatoC.text,
-                    'data_inicio': FieldValue.serverTimestamp(),
-                    'data_fim': Timestamp.fromDate(dataCalculadaFim),
                   });
                   await FirebaseFirestore.instance
                       .collection('servicos_destaque')
@@ -1215,57 +1078,132 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
                       ),
                       const SizedBox(height: 10),
 
-                      // === NOVOS CAMPOS DE COBRANÇA E TEMPO ===
-                      if ([
-                        'Eventos',
-                        'Premium',
-                        'Destaques',
-                      ].contains(tipoSelecionado)) ...[
-                        const Divider(),
-                        const Text(
-                          "Configuração e Cobrança",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green,
-                          ),
+                      const Divider(),
+                      Text(
+                        "Valor e Período",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: diPertinRoxo,
+                          fontSize: 14,
                         ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: donoC,
-                          decoration: const InputDecoration(
-                            labelText: "Nome do Cliente/Contratante",
-                            border: OutlineInputBorder(),
-                          ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: donoC,
+                        decoration: const InputDecoration(
+                          labelText: "Nome do Contratante (quem paga)",
+                          border: OutlineInputBorder(),
                         ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: diasC,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: "Qtd. de Dias",
-                                  border: OutlineInputBorder(),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: valorC,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: modalidadeValor == 'diario'
+                                    ? "Valor por dia (R\$)"
+                                    : "Valor por mês (R\$)",
+                                border: const OutlineInputBorder(),
+                                prefixText: "R\$ ",
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(value: 'diario', label: Text('Dia')),
+                              ButtonSegment(value: 'mensal', label: Text('Mês')),
+                            ],
+                            selected: {modalidadeValor},
+                            onSelectionChanged: (v) =>
+                                setState(() => modalidadeValor = v.first),
+                            style: SegmentedButton.styleFrom(
+                              selectedBackgroundColor: diPertinLaranja,
+                              selectedForegroundColor: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final p = await showDatePicker(
+                                  context: context,
+                                  initialDate: dataInicio,
+                                  firstDate: DateTime(2024),
+                                  lastDate: DateTime(2030),
+                                );
+                                if (p != null) setState(() => dataInicio = p);
+                              },
+                              icon: const Icon(Icons.calendar_today, size: 16),
+                              label: Text(
+                                "Início: ${dataInicio.day.toString().padLeft(2, '0')}/${dataInicio.month.toString().padLeft(2, '0')}/${dataInicio.year}",
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final p = await showDatePicker(
+                                  context: context,
+                                  initialDate: dataFim,
+                                  firstDate: DateTime(2024),
+                                  lastDate: DateTime(2030),
+                                );
+                                if (p != null) setState(() => dataFim = p);
+                              },
+                              icon: const Icon(Icons.event_available, size: 16),
+                              label: Text(
+                                "Fim: ${dataFim.day.toString().padLeft(2, '0')}/${dataFim.month.toString().padLeft(2, '0')}/${dataFim.year}",
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Builder(
+                        builder: (_) {
+                          final dias = dataFim.difference(dataInicio).inDays.clamp(1, 99999);
+                          final val = double.tryParse(valorC.text.replaceAll(',', '.')) ?? 0;
+                          double total;
+                          if (modalidadeValor == 'mensal') {
+                            final meses = (dias / 30).ceil().clamp(1, 9999);
+                            total = val * meses;
+                          } else {
+                            total = val * dias;
+                          }
+                          if (val <= 0) return const SizedBox(height: 15);
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.green.shade200),
+                              ),
+                              child: Text(
+                                modalidadeValor == 'mensal'
+                                    ? "$dias dias (${(dias / 30).ceil()} mês(es)) × R\$ ${val.toStringAsFixed(2)}/mês = R\$ ${total.toStringAsFixed(2)}"
+                                    : "$dias dias × R\$ ${val.toStringAsFixed(2)}/dia = R\$ ${total.toStringAsFixed(2)}",
+                                style: TextStyle(
+                                  color: Colors.green.shade800,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: TextField(
-                                controller: valorC,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: "Valor diário (R\$)",
-                                  border: OutlineInputBorder(),
-                                  prefixText: "R\$ ",
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 15),
-                      ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 15),
 
                       // BOTÃO DE UPLOAD DE FOTO (Apenas para Eventos e Achados)
                       if (['Eventos', 'Achados'].contains(tipoSelecionado)) ...[
@@ -1339,6 +1277,68 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
   }
 
   // --- LISTAS DAS ABAS ---
+
+  /// Retorna (diasRestantes, cor, icone, label) com base no vencimento.
+  /// diasRestantes > 0 = falta para vencer, <= 0 = já venceu.
+  ({int dias, Color cor, IconData icone, String label}) _statusVencimento(
+      Timestamp? tsVenc) {
+    if (tsVenc == null) {
+      return (dias: 999, cor: Colors.green, icone: Icons.check, label: 'Ativo');
+    }
+    final agora = DateTime.now();
+    final venc = tsVenc.toDate();
+    final diff = DateTime(venc.year, venc.month, venc.day)
+        .difference(DateTime(agora.year, agora.month, agora.day))
+        .inDays;
+
+    if (diff > 3) {
+      return (
+        dias: diff,
+        cor: const Color(0xFF16A34A),
+        icone: Icons.check_circle_rounded,
+        label: '$diff dias restantes',
+      );
+    } else if (diff > 0) {
+      return (
+        dias: diff,
+        cor: const Color(0xFFD97706),
+        icone: Icons.warning_amber_rounded,
+        label: 'Vencendo em $diff dia${diff > 1 ? 's' : ''}',
+      );
+    } else if (diff == 0) {
+      return (
+        dias: 0,
+        cor: const Color(0xFFDC2626),
+        icone: Icons.error_rounded,
+        label: 'Vence hoje!',
+      );
+    } else {
+      final atraso = diff.abs();
+      return (
+        dias: diff,
+        cor: const Color(0xFFDC2626),
+        icone: Icons.cancel_rounded,
+        label: 'Vencido há $atraso dia${atraso > 1 ? 's' : ''}',
+      );
+    }
+  }
+
+  Future<void> _desativarSeVencidoHa3Dias(
+      String colecao, String docId, Timestamp? tsVenc, bool ativo) async {
+    if (!ativo || tsVenc == null) return;
+    final agora = DateTime.now();
+    final venc = tsVenc.toDate();
+    final diff = DateTime(venc.year, venc.month, venc.day)
+        .difference(DateTime(agora.year, agora.month, agora.day))
+        .inDays;
+    if (diff < -3) {
+      await FirebaseFirestore.instance
+          .collection(colecao)
+          .doc(docId)
+          .update({'ativo': false});
+    }
+  }
+
   Widget _buildListaGenerica({
     required String colecao,
     required String campoTitulo,
@@ -1367,61 +1367,105 @@ class _UtilidadesScreenState extends State<UtilidadesScreen> {
             var dados = doc.data() as Map<String, dynamic>;
             bool ativo = dados['ativo'] ?? false;
 
-            bool estaVencido = false;
-            if (campoDataVencimento != null &&
-                dados[campoDataVencimento] != null) {
-              DateTime venc = (dados[campoDataVencimento] as Timestamp)
-                  .toDate();
-              if (venc.isBefore(DateTime.now())) estaVencido = true;
-            }
+            final tsVenc = campoDataVencimento != null
+                ? dados[campoDataVencimento] as Timestamp?
+                : null;
+            final sv = _statusVencimento(tsVenc);
+
+            _desativarSeVencidoHa3Dias(colecao, doc.id, tsVenc, ativo);
+
+            final corFundo = !ativo
+                ? Colors.grey[200]!
+                : sv.dias < -3
+                    ? Colors.red.shade50
+                    : Colors.white;
 
             return Card(
               elevation: 2,
-              color: ativo ? Colors.white : Colors.grey[200],
+              color: corFundo,
               margin: const EdgeInsets.only(bottom: 10),
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: ativo
-                      ? (estaVencido ? Colors.orange : Colors.green)
-                      : Colors.red,
-                  child: Icon(
-                    ativo
-                        ? (estaVencido ? Icons.timer_off : Icons.check)
-                        : Icons.block,
-                    color: Colors.white,
-                  ),
-                ),
-                title: Text(
-                  dados[campoTitulo] ?? 'Sem Título',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: ativo && sv.dias <= 0
+                    ? BorderSide(color: sv.cor.withValues(alpha: 0.4))
+                    : BorderSide.none,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
                   children: [
-                    Text(dados[campoSubtitulo] ?? ''),
-                    if (campoDataVencimento != null)
-                      Text(
-                        "Vencimento: ${_formatarData(dados[campoDataVencimento])}",
-                        style: TextStyle(
-                          color: estaVencido ? Colors.red : Colors.grey,
-                          fontWeight: estaVencido ? FontWeight.bold : null,
-                        ),
+                    CircleAvatar(
+                      backgroundColor: ativo ? sv.cor : Colors.grey,
+                      child: Icon(
+                        ativo ? sv.icone : Icons.block,
+                        color: Colors.white,
+                        size: 20,
                       ),
-                  ],
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            dados[campoTitulo] ?? 'Sem Título',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            dados[campoSubtitulo] ?? '',
+                            style: TextStyle(
+                                fontSize: 12.5, color: Colors.grey.shade700),
+                          ),
+                          if (campoDataVencimento != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              "Vencimento: ${_formatarData(tsVenc)}",
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                          if (ativo && campoDataVencimento != null) ...[
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: sv.cor.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                    color: sv.cor.withValues(alpha: 0.3)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(sv.icone, size: 13, color: sv.cor),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    sv.label,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: sv.cor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                     if (botoesExtras != null) botoesExtras(doc.id, dados),
-                    const SizedBox(width: 10),
-                    // Botão de Ativar / Desativar
+                    const SizedBox(width: 6),
                     Switch(
                       value: ativo,
                       activeThumbColor: Colors.green,
                       onChanged: (val) => _toggleAtivo(colecao, doc.id, ativo),
                     ),
-                    const SizedBox(width: 5),
-                    // === NOVO BOTÃO DE DELETAR ===
                     IconButton(
                       icon: const Icon(Icons.delete_outline, color: Colors.red),
                       tooltip: "Apagar permanentemente",
