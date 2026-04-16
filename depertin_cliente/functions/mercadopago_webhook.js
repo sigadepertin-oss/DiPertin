@@ -1629,6 +1629,35 @@ exports.processarEstornoPainel = onCall(
             );
         }
 
+        let payment;
+        try {
+            payment = await fetchPaymentFromMp(accessToken, mpPaymentId);
+        } catch (fetchErr) {
+            console.error("[estorno-painel] Erro ao buscar pagamento no MP:", fetchErr.message);
+            throw new HttpsError(
+                "not-found",
+                `Não foi possível localizar o pagamento no Mercado Pago (ID: ${mpPaymentId}).`,
+            );
+        }
+
+        const paymentStatus = String(payment.status || "").toLowerCase();
+        const paymentDetail = String(payment.status_detail || "");
+        console.log(`[estorno-painel] Pagamento ${mpPaymentId}: status=${paymentStatus}, detail=${paymentDetail}, amount=${payment.transaction_amount}`);
+
+        if (paymentStatus === "refunded") {
+            throw new HttpsError(
+                "already-exists",
+                "Este pagamento já foi estornado integralmente no Mercado Pago.",
+            );
+        }
+
+        if (paymentStatus !== "approved") {
+            throw new HttpsError(
+                "failed-precondition",
+                `Pagamento com status "${paymentStatus}" não pode ser estornado. Apenas pagamentos aprovados permitem estorno.`,
+            );
+        }
+
         const parcial = valor < valorTotal;
         let refundResult;
         try {
@@ -1639,11 +1668,20 @@ exports.processarEstornoPainel = onCall(
             }
         } catch (err) {
             console.error("[estorno-painel] Erro MP refund:", err.message, err.body);
-            const mpMsg = err.body?.message || err.message || "Erro desconhecido";
-            throw new HttpsError(
-                "internal",
-                `Mercado Pago recusou o estorno: ${mpMsg}`,
-            );
+            const mpBody = err.body || {};
+            let mensagemErro = mpBody.message || err.message || "Erro desconhecido";
+
+            if (err.status === 400 && String(mensagemErro).includes("amount")) {
+                mensagemErro = "Valor do estorno excede o valor disponível para reembolso.";
+            } else if (err.status === 400) {
+                mensagemErro = `Mercado Pago rejeitou: ${mensagemErro}`;
+            } else if (err.status === 404) {
+                mensagemErro = "Pagamento não encontrado no Mercado Pago.";
+            } else if (err.status === 500 || err.status === 503) {
+                mensagemErro = "Mercado Pago está temporariamente indisponível. Tente novamente em alguns minutos.";
+            }
+
+            throw new HttpsError("internal", mensagemErro);
         }
 
         const batch = db.batch();
