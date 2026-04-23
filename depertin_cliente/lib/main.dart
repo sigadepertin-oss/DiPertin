@@ -604,6 +604,23 @@ class _SplashScreenState extends State<SplashScreen> {
     final isNovoPedidoLoja =
         tipo == FcmNotificationEventos.tipoNovoPedido ||
         typeRaw == FcmNotificationEventos.typeNovoPedido;
+
+    final bool isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+    // No Android, o `IncomingDeliveryFirebaseService` nativo já publica a
+    // notificação rica de corrida (com som + full-screen intent + botões
+    // Aceitar/Recusar). Se também publicarmos pelo Flutter aqui, o
+    // entregador vê duas notificações (e a nossa fica "pinada" depois de
+    // aceitar/recusar, exigindo remoção manual). Deixamos o nativo cuidar
+    // sozinho.
+    if (isAndroid && isCorrida) {
+      debugPrint(
+        '[FCM] Corrida em foreground — notificação delegada ao nativo',
+      );
+      return;
+    }
+
     final n = message.notification;
     String title = n?.title ?? '';
     String body = n?.body ?? '';
@@ -612,9 +629,6 @@ class _SplashScreenState extends State<SplashScreen> {
       title = 'Nova corrida DiPertin';
       body = 'Toque para abrir o radar e aceitar.';
     }
-
-    final bool isAndroid =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     // LargeIcon colorido (logo do app) para aparecer ao lado do texto da
     // notificação no Android em foreground. O smallIcon (status bar) é
     // mantido como a silhueta monocromática exigida pelo Android 5+.

@@ -1,12 +1,14 @@
 // Arquivo: lib/screens/entregador/entregador_form_screen.dart
 
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../services/permissoes_app_service.dart';
 
@@ -25,11 +27,17 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
   File? _arqDocPessoal;
   File? _arqCRLV;
   File? _arqFotoVeiculo;
+  File? _arqSelfie;
 
   // URLs já enviados anteriormente (para reenvio sem precisar anexar de novo)
   String? _urlDocPessoalAtual;
   String? _urlCrlvAtual;
   String? _urlFotoVeiculoAtual;
+  String? _urlSelfieAtual;
+
+  /// Quando `true` a selfie já foi aprovada e não pode mais ser trocada
+  /// (virou foto de perfil permanente do entregador).
+  bool _selfieBloqueada = false;
 
   final _modeloController = TextEditingController();
   final _placaController = TextEditingController();
@@ -112,6 +120,11 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
                   (dados['url_foto_veículo'] ?? '').toString().isNotEmpty
                       ? dados['url_foto_veículo'].toString()
                       : null;
+              _urlSelfieAtual =
+                  (dados['url_selfie_entregador'] ?? '').toString().isNotEmpty
+                      ? dados['url_selfie_entregador'].toString()
+                      : null;
+              _selfieBloqueada = dados['selfie_bloqueada'] == true;
             });
           }
         }
@@ -146,6 +159,68 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
     }
   }
 
+  /// Captura a selfie obrigatoriamente pela CÂMERA do celular — nunca
+  /// da galeria — como medida antifraude (garante que é a pessoa real).
+  /// Bloqueia nova captura se a selfie já foi aprovada pelo painel.
+  Future<void> _capturarSelfieCamera() async {
+    if (_selfieBloqueada) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'A selfie já foi aprovada e está travada como foto de perfil.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'A selfie precisa ser tirada no aplicativo mobile — câmera do celular.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final ResultadoPermissao pr =
+        await PermissoesAppService.garantirCamera();
+    if (!mounted) return;
+    if (pr != ResultadoPermissao.concedida) {
+      PermissoesFeedback.camera(context, pr);
+      return;
+    }
+
+    try {
+      final picker = ImagePicker();
+      final XFile? imagem = await picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 82,
+        requestFullMetadata: false,
+      );
+      if (imagem == null) return;
+      if (!mounted) return;
+      setState(() {
+        _arqSelfie = File(imagem.path);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível acessar a câmera: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<String> _fazerUpload(File arquivo, String nomeBase, String uid) async {
     // Descobre se o arquivo é .pdf, .jpg, .png...
     String extensao = arquivo.path.split('.').last.toLowerCase();
@@ -168,11 +243,28 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
     final temCrlv = _veiculoSelecionado == 'Bicicleta' ||
         _arqCRLV != null ||
         (_urlCrlvAtual != null && _urlCrlvAtual!.isNotEmpty);
+    // Selfie: obrigatória enquanto não estiver bloqueada/aprovada.
+    // Se já aprovada, apenas a URL anterior é reaproveitada.
+    final temSelfie = _selfieBloqueada
+        ? (_urlSelfieAtual != null && _urlSelfieAtual!.isNotEmpty)
+        : (_arqSelfie != null ||
+            (_urlSelfieAtual != null && _urlSelfieAtual!.isNotEmpty));
 
     if (!temDocPessoal || !temFotoVeiculo || !temCrlv) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Anexe todos os documentos obrigatórios.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    if (!temSelfie) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tire a selfie de verificação pela câmera do celular antes de enviar.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -235,11 +327,18 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
           urlCRLV = '';
         }
 
+        // Selfie de verificação (câmera). Se bloqueada, mantém URL anterior.
+        String urlSelfie = _urlSelfieAtual ?? '';
+        if (!_selfieBloqueada && _arqSelfie != null) {
+          urlSelfie = await _fazerUpload(
+            _arqSelfie!,
+            'selfie_${DateTime.now().millisecondsSinceEpoch}',
+            user.uid,
+          );
+        }
+
         // === Atualiza o doc principal (campos planos — painel web) ===
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .update({
+        final Map<String, dynamic> atualizacao = {
           'role': 'entregador',
           'entregador_status': 'pendente',
           'veiculoTipo': _veiculoSelecionado,
@@ -250,7 +349,17 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
           'url_crlv': urlCRLV,
           'motivo_recusa': FieldValue.delete(),
           'data_solicitacao_entregador': FieldValue.serverTimestamp(),
-        });
+        };
+        // Só atualiza selfie se ela ainda não estiver travada pelo painel.
+        if (!_selfieBloqueada) {
+          atualizacao['url_selfie_entregador'] = urlSelfie;
+          atualizacao['selfie_status'] = 'pendente';
+          atualizacao['selfie_enviada_em'] = FieldValue.serverTimestamp();
+        }
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .update(atualizacao);
 
         // === Semeia veículo ativo em users/{uid}/veiculos ===
         await _garantirVeiculoAtivoNaSubcolecao(
@@ -356,6 +465,174 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
         'atualizado_em': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
+  }
+
+  Widget _construirCampoSelfie() {
+    final bool novaSelfie = _arqSelfie != null;
+    final bool temAnterior = (_urlSelfieAtual ?? '').isNotEmpty;
+    final bool travada = _selfieBloqueada;
+    final bool temAlguma = novaSelfie || temAnterior;
+
+    ImageProvider? preview;
+    if (novaSelfie) {
+      preview = FileImage(_arqSelfie!);
+    } else if (temAnterior) {
+      preview = NetworkImage(_urlSelfieAtual!);
+    }
+
+    final Color corBorda = travada
+        ? Colors.green
+        : (temAlguma ? diPertinRoxo : Colors.grey.shade400);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: corBorda, width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                travada ? Icons.verified_user : Icons.camera_front,
+                color: travada ? Colors.green : diPertinRoxo,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Selfie de verificação',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+              if (travada)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.green.shade300),
+                  ),
+                  child: const Text(
+                    'Verificada',
+                    style: TextStyle(
+                      color: Colors.green,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 92,
+                height: 92,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: corBorda, width: 2),
+                  image: preview != null
+                      ? DecorationImage(
+                          image: preview,
+                          fit: BoxFit.cover,
+                        )
+                      : null,
+                ),
+                child: preview == null
+                    ? Icon(
+                        Icons.person,
+                        size: 46,
+                        color: Colors.grey.shade400,
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      travada
+                          ? 'Sua identidade foi verificada. A selfie foi definida como sua foto de perfil e não pode mais ser alterada.'
+                          : novaSelfie
+                              ? 'Selfie capturada. Revise e envie para análise.'
+                              : temAnterior
+                                  ? 'Selfie enviada anteriormente. Você pode tirar uma nova antes de reenviar.'
+                                  : 'Tire uma selfie (câmera do celular) para confirmar que é você. Não é permitido importar da galeria.',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Colors.black87,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (!travada)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _capturarSelfieCamera,
+                          icon: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          label: Text(
+                            temAlguma ? 'Tirar novamente' : 'Abrir câmera',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: diPertinLaranja,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (!travada) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 15, color: Colors.grey.shade700),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    'Quando seu cadastro for aprovado, esta selfie vira sua foto de perfil permanente (medida antifraude).',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: Colors.black54,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _botaoUploadCustomizado({
@@ -578,6 +855,18 @@ class _EntregadorFormScreenState extends State<EntregadorFormScreen> {
 
                   const SizedBox(height: 20),
 
+                  const Text(
+                    "Verificação de Identidade",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _construirCampoSelfie(),
+
+                  const SizedBox(height: 10),
                   const Text(
                     "Documentação Obrigatória",
                     style: TextStyle(

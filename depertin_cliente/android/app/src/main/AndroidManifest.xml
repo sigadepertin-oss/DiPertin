@@ -14,10 +14,18 @@
         <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
         <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
         <uses-permission android:name="android.permission.CAMERA" />
+        <uses-permission android:name="android.permission.FLASHLIGHT" />
+        <uses-permission android:name="android.permission.VIBRATE" />
         <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
         <uses-permission
             android:name="android.permission.READ_EXTERNAL_STORAGE"
             android:maxSdkVersion="32" />
+
+        <!-- Biometria: login por digital/face (local_auth).
+             USE_BIOMETRIC (API 29+) é a preferida; USE_FINGERPRINT cobre
+             aparelhos antigos (<=API 28). Não requer runtime permission. -->
+        <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+        <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
         <!--
             DiPertin NÃO exibe anúncios e NÃO coleta Advertising ID.

@@ -588,6 +588,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final String enderecoPadrao = userData['endereco_padrao'] ?? '';
     final String nomeLojaDoc = userData['loja_nome'] ?? userData['nome_loja'] ?? '';
     final String fotoPerfil = userData['foto_perfil'] ?? '';
+    // Entregador aprovado com selfie de verificação travada: foto de perfil
+    // é a selfie validada e não pode ser alterada nem removida.
+    final bool fotoPerfilTravada = role == 'entregador' &&
+        userData['selfie_bloqueada'] == true;
 
     final String ownerUid =
         (userData['lojista_owner_uid'] ?? '').toString().trim();
@@ -629,7 +633,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           Center(
             child: GestureDetector(
-              onTap: () => _mostrarOpcoesFotoPerfil(context, fotoPerfil),
+              onTap: () => _mostrarOpcoesFotoPerfil(
+                context,
+                fotoPerfil,
+                travada: fotoPerfilTravada,
+              ),
               child: Stack(
                 children: [
                   Container(
@@ -1220,7 +1228,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  void _mostrarOpcoesFotoPerfil(BuildContext context, String fotoAtual) {
+  void _mostrarOpcoesFotoPerfil(
+    BuildContext context,
+    String fotoAtual, {
+    bool travada = false,
+  }) {
     final temFoto = fotoAtual.isNotEmpty;
 
     showModalBottomSheet<void>(
@@ -1252,63 +1264,109 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: Colors.grey.shade800,
                   ),
                 ),
-                const SizedBox(height: 18),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _opcaoFotoCircular(
-                      icone: Icons.camera_alt_rounded,
-                      cor: diPertinRoxo,
-                      rotulo: 'Câmera',
-                      onTap: () async {
-                        Navigator.pop(ctx);
-                        await Future<void>.delayed(
-                          const Duration(milliseconds: 250),
-                        );
-                        if (!mounted) return;
-                        await _escolherFoto(context, ImageSource.camera);
-                      },
+                if (travada) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.green.shade200),
                     ),
-                    _opcaoFotoCircular(
-                      icone: Icons.photo_library_rounded,
-                      cor: diPertinLaranja,
-                      rotulo: 'Galeria',
-                      onTap: () async {
-                        Navigator.pop(ctx);
-                        await Future<void>.delayed(
-                          const Duration(milliseconds: 250),
-                        );
-                        if (!mounted) return;
-                        await _escolherFoto(context, ImageSource.gallery);
-                      },
+                    child: Row(
+                      children: [
+                        Icon(Icons.verified_user,
+                            color: Colors.green.shade700, size: 26),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Sua foto de perfil está travada como selfie de verificação do cadastro de entregador. Ela não pode ser alterada nem removida.',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              height: 1.35,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    if (temFoto)
+                  ),
+                  const SizedBox(height: 16),
+                  if (temFoto)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _opcaoFotoCircular(
+                          icone: Icons.zoom_in_rounded,
+                          cor: Colors.blueGrey,
+                          rotulo: 'Ver foto',
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _mostrarFotoPerfilAmpliada(context, fotoAtual);
+                          },
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 8),
+                ] else ...[
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
                       _opcaoFotoCircular(
-                        icone: Icons.zoom_in_rounded,
-                        cor: Colors.blueGrey,
-                        rotulo: 'Ver foto',
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _mostrarFotoPerfilAmpliada(context, fotoAtual);
-                        },
-                      ),
-                    if (temFoto)
-                      _opcaoFotoCircular(
-                        icone: Icons.delete_outline_rounded,
-                        cor: Colors.red.shade600,
-                        rotulo: 'Remover',
+                        icone: Icons.camera_alt_rounded,
+                        cor: diPertinRoxo,
+                        rotulo: 'Câmera',
                         onTap: () async {
                           Navigator.pop(ctx);
                           await Future<void>.delayed(
                             const Duration(milliseconds: 250),
                           );
                           if (!mounted) return;
-                          await _confirmarRemoverFoto(context);
+                          await _escolherFoto(context, ImageSource.camera);
                         },
                       ),
-                  ],
-                ),
-                const SizedBox(height: 8),
+                      _opcaoFotoCircular(
+                        icone: Icons.photo_library_rounded,
+                        cor: diPertinLaranja,
+                        rotulo: 'Galeria',
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 250),
+                          );
+                          if (!mounted) return;
+                          await _escolherFoto(context, ImageSource.gallery);
+                        },
+                      ),
+                      if (temFoto)
+                        _opcaoFotoCircular(
+                          icone: Icons.zoom_in_rounded,
+                          cor: Colors.blueGrey,
+                          rotulo: 'Ver foto',
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _mostrarFotoPerfilAmpliada(context, fotoAtual);
+                          },
+                        ),
+                      if (temFoto)
+                        _opcaoFotoCircular(
+                          icone: Icons.delete_outline_rounded,
+                          cor: Colors.red.shade600,
+                          rotulo: 'Remover',
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            await Future<void>.delayed(
+                              const Duration(milliseconds: 250),
+                            );
+                            if (!mounted) return;
+                            await _confirmarRemoverFoto(context);
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ],
             ),
           ),

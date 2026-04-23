@@ -9,6 +9,12 @@ class CartItemModel {
   final String imagem;
   int quantidade;
 
+  /// Marca produtos que NÃO cabem em moto/bike (volumosos, frágeis grandes,
+  /// cargas maiores). Se qualquer item do grupo de uma loja estiver marcado,
+  /// o frete dessa loja é calculado pela tabela "carro". Caso contrário,
+  /// usa sempre a tabela "padrão" (moto/bike).
+  final bool requerVeiculoGrande;
+
   CartItemModel({
     required this.id,
     required this.nome,
@@ -17,10 +23,17 @@ class CartItemModel {
     required this.lojaNome,
     required this.imagem,
     this.quantidade = 1,
+    this.requerVeiculoGrande = false,
   });
 
-  // 1. Transforma o Produto em formato JSON (Texto) para salvar no celular
   Map<String, dynamic> toJson() {
+    // Proteção contra hot-reload: instâncias antigas podem não ter o slot
+    // de `requerVeiculoGrande` e acessá-lo lança TypeError. Se falhar,
+    // assume padrão (moto/bike).
+    bool veiculoGrande = false;
+    try {
+      veiculoGrande = requerVeiculoGrande;
+    } catch (_) {}
     return {
       'id': id,
       'nome': nome,
@@ -29,20 +42,20 @@ class CartItemModel {
       'lojaNome': lojaNome,
       'imagem': imagem,
       'quantidade': quantidade,
+      'requerVeiculoGrande': veiculoGrande,
     };
   }
 
-  // 2. Lê o JSON (Texto) do celular e recria o Produto Mágico
   factory CartItemModel.fromJson(Map<String, dynamic> json) {
     return CartItemModel(
       id: json['id'],
       nome: json['nome'],
-      preco: (json['preco'] as num)
-          .toDouble(), // Garante que o preço sempre seja double
+      preco: (json['preco'] as num).toDouble(),
       lojaId: json['lojaId'],
       lojaNome: json['lojaNome'],
       imagem: json['imagem'],
       quantidade: json['quantidade'],
+      requerVeiculoGrande: json['requerVeiculoGrande'] == true,
     );
   }
 }

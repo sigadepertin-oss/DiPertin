@@ -51,3 +51,47 @@ Future<void> signOutGoogle() async {
     debugPrint('signOutGoogle: $e');
   }
 }
+
+/// Tenta reautenticar silenciosamente no Google (sem mostrar o seletor de conta)
+/// e completar o login no Firebase. Usado pelo fluxo de "Acessar por Digital"
+/// quando o vínculo biométrico local é do tipo Google.
+///
+/// Se o silent sign-in falhar (sessão expirou, conta removida etc.), faz
+/// fallback para o fluxo interativo normal.
+Future<UserCredential> signInWithGoogleSilentForFirebase({
+  String? emailEsperado,
+}) async {
+  GoogleSignInAccount? googleUser;
+  try {
+    googleUser = await _googleSignIn.signInSilently(suppressErrors: true);
+  } catch (e) {
+    debugPrint('signInSilently falhou: $e');
+    googleUser = null;
+  }
+
+  if (googleUser == null ||
+      (emailEsperado != null &&
+          emailEsperado.trim().toLowerCase() !=
+              googleUser.email.trim().toLowerCase())) {
+    // Fallback: pede para o usuário escolher a conta.
+    return signInWithGoogleForFirebase();
+  }
+
+  final GoogleSignInAuthentication googleAuth =
+      await googleUser.authentication;
+
+  final String? idToken = googleAuth.idToken;
+  final String? accessToken = googleAuth.accessToken;
+
+  if (idToken == null && accessToken == null) {
+    // Sem tokens — cai no fluxo interativo.
+    return signInWithGoogleForFirebase();
+  }
+
+  final OAuthCredential credential = GoogleAuthProvider.credential(
+    idToken: idToken,
+    accessToken: accessToken,
+  );
+
+  return FirebaseAuth.instance.signInWithCredential(credential);
+}

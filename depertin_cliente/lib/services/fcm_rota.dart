@@ -16,10 +16,15 @@ String rotaPorPayloadFcm(Map<String, dynamic> data) {
       type == 'LOJISTA_CADASTRO_RECUSADO') {
     return '/lojista-cadastro';
   }
-  // Cadastro de entregador aprovado/recusado → formulário do cadastro.
+  // Cadastro de entregador APROVADO → radar de corridas (tela home do
+  // entregador). Evita mandar o usuário recém-aprovado de volta ao formulário
+  // de cadastro; a jornada pós-aprovação é ficar online e receber ofertas.
   if (tipo == 'entregador_cadastro_aprovado' ||
-      tipo == 'entregador_cadastro_recusado' ||
-      type == 'ENTREGADOR_CADASTRO_APROVADO' ||
+      type == 'ENTREGADOR_CADASTRO_APROVADO') {
+    return '/entregador';
+  }
+  // Cadastro de entregador RECUSADO → formulário, para revisar dados/docs.
+  if (tipo == 'entregador_cadastro_recusado' ||
       type == 'ENTREGADOR_CADASTRO_RECUSADO') {
     return '/entregador-cadastro';
   }

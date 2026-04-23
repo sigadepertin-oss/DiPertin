@@ -85,6 +85,8 @@ class _LojistaMeuCardapioScreenState extends State<LojistaMeuCardapioScreen> {
     if (tipo != 'pronta_entrega' && tipo != 'encomenda') {
       tipo = 'pronta_entrega';
     }
+    var requerVeiculoGrande =
+        d['requer_veiculo_grande'] == true || d['carga_maior'] == true;
 
     await showDialog<void>(
       context: context,
@@ -256,6 +258,69 @@ class _LojistaMeuCardapioScreenState extends State<LojistaMeuCardapioScreen> {
                           activeThumbColor: _laranja,
                           onChanged: (v) => setS(() => ativo = v),
                         ),
+                        const SizedBox(height: 20),
+                        _secForm('Logística de entrega'),
+                        const SizedBox(height: 4),
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: requerVeiculoGrande
+                                ? _laranja.withValues(alpha: 0.08)
+                                : const Color(0xFFF8F7FC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: requerVeiculoGrande
+                                  ? _laranja.withValues(alpha: 0.45)
+                                  : Colors.grey.shade300,
+                              width: 1,
+                            ),
+                          ),
+                          child: SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.local_shipping_rounded,
+                                  size: 18,
+                                  color: requerVeiculoGrande
+                                      ? _laranja
+                                      : Colors.grey.shade600,
+                                ),
+                                const SizedBox(width: 8),
+                                const Flexible(
+                                  child: Text(
+                                    'Requer veículo maior (carro)',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                requerVeiculoGrande
+                                    ? 'Este item será entregue pela tabela de frete do carro (volumoso, frágil grande ou pesado).'
+                                    : 'Mantenha desligado quando couber em moto/bike. Se ligado, o frete da loja passa a usar a tabela do carro sempre que este item estiver no carrinho.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade700,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                            value: requerVeiculoGrande,
+                            activeThumbColor: _laranja,
+                            onChanged: (v) =>
+                                setS(() => requerVeiculoGrande = v),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -297,6 +362,8 @@ class _LojistaMeuCardapioScreenState extends State<LojistaMeuCardapioScreen> {
                                     'imagens': imgs,
                                     'lojista_id': uidLoja,
                                     'loja_id': uidLoja,
+                                    'requer_veiculo_grande':
+                                        requerVeiculoGrande,
                                     'updated_at': FieldValue.serverTimestamp(),
                                   };
                                   if (!isEdit) {

@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/painel_admin_theme.dart';
@@ -49,8 +50,13 @@ class _EntregadorEditarDialogState extends State<EntregadorEditarDialog> {
   String _urlDoc = '';
   String _urlCrlv = '';
   String _urlFotoVeiculo = '';
+  // Mantém controle de arquivos recém-selecionados (ainda não salvos) para feedback.
+  final Set<String> _alterados = <String>{};
 
   String? _veiculoAtivoId;
+
+  static const _corBorda = Color(0xFFE2E8F0);
+  static const _corSurface = Color(0xFFF8FAFC);
 
   @override
   void initState() {
@@ -247,8 +253,10 @@ class _EntregadorEditarDialogState extends State<EntregadorEditarDialog> {
         } else {
           _urlFotoVeiculo = url;
         }
+        _alterados.add(chave);
       });
-      mostrarSnackPainel(context, mensagem: 'Arquivo selecionado. Salve para gravar.');
+      mostrarSnackPainel(context,
+          mensagem: 'Arquivo selecionado. Clique em "Salvar alterações" para gravar.');
     } catch (e) {
       if (mounted) {
         mostrarSnackPainel(context,
@@ -349,261 +357,678 @@ class _EntregadorEditarDialogState extends State<EntregadorEditarDialog> {
     }
   }
 
-  Widget _secTitulo(String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 8, top: 4),
-        child: Text(
-          t,
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            color: PainelAdminTheme.roxo,
-            letterSpacing: 0.4,
-          ),
-        ),
-      );
+  // ---------- Componentes de UI ----------
 
-  Widget _campo({
+  InputDecoration _decoracaoCampo({
     required String label,
-    required TextEditingController c,
-    int maxLines = 1,
+    String? prefix,
+    IconData? iconePrefix,
   }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: TextField(
-        controller: c,
-        maxLines: maxLines,
-        decoration: InputDecoration(
-          labelText: label,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-          isDense: true,
-        ),
+    return InputDecoration(
+      labelText: label,
+      prefixText: prefix,
+      prefixIcon: iconePrefix == null
+          ? null
+          : Icon(iconePrefix,
+              size: 18, color: PainelAdminTheme.textoSecundario),
+      isDense: true,
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      labelStyle: GoogleFonts.plusJakartaSans(
+        fontSize: 13,
+        color: PainelAdminTheme.textoSecundario,
+      ),
+      floatingLabelStyle: GoogleFonts.plusJakartaSans(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        color: PainelAdminTheme.roxo,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _corBorda),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: PainelAdminTheme.roxo, width: 1.4),
+      ),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _corBorda),
       ),
     );
   }
 
-  Widget _linhaDoc(String titulo, String url, VoidCallback onTrocar) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
+  Widget _tituloSecao(String texto) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, top: 4),
       child: Row(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(titulo,
-                    style: GoogleFonts.plusJakartaSans(
-                        fontWeight: FontWeight.w600, fontSize: 13)),
-                const SizedBox(height: 4),
-                Text(
-                  url.isEmpty ? 'Nenhum arquivo' : 'Arquivo definido (URL salva ao gravar)',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 11,
-                    color: PainelAdminTheme.textoSecundario,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+          Container(
+            width: 3,
+            height: 14,
+            decoration: BoxDecoration(
+              color: PainelAdminTheme.roxo,
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: onTrocar,
-            icon: const Icon(Icons.upload_file_rounded, size: 18),
-            label: const Text('Trocar'),
+          const SizedBox(width: 8),
+          Text(
+            texto,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: PainelAdminTheme.roxo,
+              letterSpacing: 0.6,
+            ),
           ),
         ],
       ),
     );
   }
 
+  Widget _cartaoSecao({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _corBorda),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _campo({
+    required String label,
+    required TextEditingController c,
+    List<TextInputFormatter>? formatters,
+    TextInputType? keyboardType,
+    IconData? icone,
+  }) {
+    return TextField(
+      controller: c,
+      inputFormatters: formatters,
+      keyboardType: keyboardType,
+      decoration: _decoracaoCampo(label: label, iconePrefix: icone),
+      style: GoogleFonts.plusJakartaSans(fontSize: 13.5),
+    );
+  }
+
+  Widget _dropdownVeiculo() {
+    return DropdownButtonFormField<String>(
+      value: _veiculoTipo,
+      decoration: _decoracaoCampo(
+        label: 'Tipo de veículo',
+        iconePrefix: Icons.two_wheeler_rounded,
+      ),
+      style: GoogleFonts.plusJakartaSans(
+        fontSize: 13.5,
+        color: PainelAdminTheme.dashboardInk,
+      ),
+      icon: Icon(Icons.expand_more_rounded,
+          color: PainelAdminTheme.textoSecundario),
+      items: _tiposVeiculo
+          .map((e) => DropdownMenuItem(
+                value: e,
+                child: Text(e),
+              ))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) {
+          setState(() => _veiculoTipo = v);
+        }
+      },
+    );
+  }
+
+  Widget _linhaDoc({
+    required String chave,
+    required String titulo,
+    required String url,
+    required VoidCallback onTrocar,
+  }) {
+    final temArquivo = url.trim().isNotEmpty;
+    final foiAlterado = _alterados.contains(chave);
+    final ehPdf = url.toLowerCase().contains('.pdf');
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: _corSurface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _corBorda),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _thumbDoc(url: url, temArquivo: temArquivo, ehPdf: ehPdf),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        titulo,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: PainelAdminTheme.dashboardInk,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (foiAlterado) _pillStatus(
+                      cor: const Color(0xFF059669),
+                      fundo: const Color(0xFFD1FAE5),
+                      texto: 'Novo',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  !temArquivo
+                      ? 'Nenhum arquivo enviado'
+                      : foiAlterado
+                          ? 'Arquivo selecionado — salve para enviar'
+                          : 'Arquivo cadastrado',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11.5,
+                    color: PainelAdminTheme.textoSecundario,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: onTrocar,
+            icon: Icon(
+              temArquivo
+                  ? Icons.swap_horiz_rounded
+                  : Icons.upload_file_rounded,
+              size: 16,
+            ),
+            label: Text(temArquivo ? 'Trocar' : 'Enviar'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: PainelAdminTheme.roxo,
+              side: BorderSide(
+                color: PainelAdminTheme.roxo.withValues(alpha: 0.35),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              minimumSize: const Size(0, 34),
+              visualDensity: VisualDensity.compact,
+              textStyle: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _thumbDoc({
+    required String url,
+    required bool temArquivo,
+    required bool ehPdf,
+  }) {
+    Widget conteudo;
+    if (!temArquivo) {
+      conteudo = Icon(
+        Icons.insert_drive_file_outlined,
+        color: PainelAdminTheme.textoSecundario.withValues(alpha: 0.6),
+        size: 24,
+      );
+    } else if (ehPdf) {
+      conteudo = Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.picture_as_pdf_rounded,
+              color: PainelAdminTheme.roxo, size: 24),
+          const SizedBox(height: 2),
+          Text('PDF',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: PainelAdminTheme.roxo,
+              )),
+        ],
+      );
+    } else {
+      conteudo = ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.network(
+          url,
+          width: 48,
+          height: 48,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) =>
+              Icon(Icons.broken_image_rounded,
+                  color: PainelAdminTheme.textoSecundario, size: 22),
+        ),
+      );
+    }
+
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _corBorda),
+      ),
+      alignment: Alignment.center,
+      child: conteudo,
+    );
+  }
+
+  Widget _pillStatus({
+    required Color cor,
+    required Color fundo,
+    required String texto,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: fundo,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        texto,
+        style: GoogleFonts.plusJakartaSans(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w800,
+          color: cor,
+        ),
+      ),
+    );
+  }
+
+  // ---------- Build ----------
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      insetPadding:
+          const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
+        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 740),
         child: _carregando
-            ? const Padding(
-                padding: EdgeInsets.all(48),
-                child: Center(child: CircularProgressIndicator()),
-              )
+            ? _buildCarregando()
             : _erroCarregar != null
-                ? Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_erroCarregar!,
-                            style: const TextStyle(color: Colors.red)),
-                        const SizedBox(height: 16),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Fechar'),
-                        ),
-                      ],
+                ? _buildErroCarregar()
+                : _buildFormulario(),
+      ),
+    );
+  }
+
+  Widget _buildCarregando() {
+    return const Padding(
+      padding: EdgeInsets.all(56),
+      child: Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(strokeWidth: 2.6),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErroCarregar() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline_rounded,
+              color: Colors.red.shade700, size: 32),
+          const SizedBox(height: 10),
+          Text(
+            _erroCarregar!,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 13,
+              color: PainelAdminTheme.dashboardInk,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFormulario() {
+    final nomeSubtitulo = _nome.text.trim();
+    final cidadeSubtitulo = _cidade.text.trim();
+    final metaHeader = <String>[
+      if (nomeSubtitulo.isNotEmpty) nomeSubtitulo,
+      if (cidadeSubtitulo.isNotEmpty) cidadeSubtitulo,
+    ].join(' · ');
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 10, 14),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: PainelAdminTheme.roxo.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.edit_rounded,
+                  color: PainelAdminTheme.roxo,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Editar entregador',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: PainelAdminTheme.dashboardInk,
+                      ),
                     ),
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 18, 8, 8),
-                        child: Row(
-                          children: [
-                            Icon(Icons.edit_rounded,
-                                color: PainelAdminTheme.roxo, size: 26),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Editar entregador',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: _salvando
-                                  ? null
-                                  : () => Navigator.pop(context),
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                          ],
+                    if (metaHeader.isNotEmpty) const SizedBox(height: 2),
+                    if (metaHeader.isNotEmpty)
+                      Text(
+                        metaHeader,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 12.5,
+                          color: PainelAdminTheme.textoSecundario,
                         ),
                       ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Fechar',
+                onPressed:
+                    _salvando ? null : () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: _corBorda),
+
+        // Corpo
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Seção: Dados gerais
+                _tituloSecao('DADOS GERAIS'),
+                _cartaoSecao(
+                  child: Column(
+                    children: [
+                      _campo(
+                        label: 'Nome',
+                        c: _nome,
+                        icone: Icons.person_outline_rounded,
+                      ),
+                      const SizedBox(height: 12),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final largo = constraints.maxWidth >= 420;
+                          if (!largo) {
+                            return Column(
+                              children: [
+                                _campo(
+                                  label: 'Cidade',
+                                  c: _cidade,
+                                  icone: Icons.location_city_rounded,
+                                ),
+                                const SizedBox(height: 12),
+                                _campo(
+                                  label: 'Telefone',
+                                  c: _telefone,
+                                  icone: Icons.phone_outlined,
+                                  keyboardType: TextInputType.phone,
+                                ),
+                              ],
+                            );
+                          }
+                          return Row(
                             children: [
-                              _secTitulo('DADOS GERAIS'),
-                              _campo(label: 'Nome', c: _nome),
-                              _campo(label: 'Cidade', c: _cidade),
-                              _campo(label: 'Telefone', c: _telefone),
-                              _secTitulo('VEÍCULO'),
-                              DropdownButtonFormField<String>(
-                                value: _veiculoTipo,
-                                decoration: InputDecoration(
-                                  labelText: 'Tipo de veículo',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  isDense: true,
-                                ),
-                                items: _tiposVeiculo
-                                    .map((e) => DropdownMenuItem(
-                                          value: e,
-                                          child: Text(e),
-                                        ))
-                                    .toList(),
-                                onChanged: (v) {
-                                  if (v != null) {
-                                    setState(() => _veiculoTipo = v);
-                                  }
-                                },
-                              ),
-                              const SizedBox(height: 10),
-                              _campo(label: 'Modelo', c: _modelo),
-                              if (_veiculoTipo != 'Bicicleta')
-                                _campo(label: 'Placa', c: _placa),
-                              _secTitulo('DOCUMENTOS'),
-                              Text(
-                                'Envie PDF ou imagem (máx. 20 MB). Use Salvar para gravar no cadastro.',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11.5,
-                                  color: PainelAdminTheme.textoSecundario,
-                                  height: 1.35,
+                              Expanded(
+                                child: _campo(
+                                  label: 'Cidade',
+                                  c: _cidade,
+                                  icone: Icons.location_city_rounded,
                                 ),
                               ),
-                              const SizedBox(height: 8),
-                              _linhaDoc(
-                                'CNH / documento pessoal',
-                                _urlDoc,
-                                () => _trocarDoc('doc'),
-                              ),
-                              if (_veiculoTipo != 'Bicicleta')
-                                _linhaDoc(
-                                  'CRLV',
-                                  _urlCrlv,
-                                  () => _trocarDoc('crlv'),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _campo(
+                                  label: 'Telefone',
+                                  c: _telefone,
+                                  icone: Icons.phone_outlined,
+                                  keyboardType: TextInputType.phone,
                                 ),
-                              _linhaDoc(
-                                'Foto do veículo',
-                                _urlFotoVeiculo,
-                                () => _trocarDoc('foto'),
                               ),
                             ],
-                          ),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            TextButton(
-                              onPressed:
-                                  _salvando ? null : () => Navigator.pop(context),
-                              child: const Text('Cancelar'),
-                            ),
-                            const Spacer(),
-                            FilledButton(
-                              onPressed: _salvando ? null : _salvar,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: PainelAdminTheme.laranja,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 20, vertical: 12),
-                              ),
-                              child: _salvando
-                                  ? Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        Text(
-                                          'Salvando…',
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(Icons.save_rounded, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          'Salvar alterações',
-                                          style: GoogleFonts.plusJakartaSans(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                            ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ],
                   ),
-      ),
+                ),
+
+                const SizedBox(height: 18),
+
+                // Seção: Veículo
+                _tituloSecao('VEÍCULO'),
+                _cartaoSecao(
+                  child: Column(
+                    children: [
+                      _dropdownVeiculo(),
+                      const SizedBox(height: 12),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final largo = constraints.maxWidth >= 420;
+                          final campos = [
+                            _campo(
+                              label: 'Modelo',
+                              c: _modelo,
+                              icone: Icons.local_shipping_outlined,
+                            ),
+                            if (_veiculoTipo != 'Bicicleta')
+                              _campo(
+                                label: 'Placa',
+                                c: _placa,
+                                icone: Icons.confirmation_number_outlined,
+                                formatters: [
+                                  LengthLimitingTextInputFormatter(7),
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[A-Za-z0-9]'),
+                                  ),
+                                  _UpperCaseTextFormatter(),
+                                ],
+                              ),
+                          ];
+                          if (!largo || campos.length < 2) {
+                            return Column(
+                              children: [
+                                for (int i = 0; i < campos.length; i++) ...[
+                                  if (i > 0) const SizedBox(height: 12),
+                                  campos[i],
+                                ],
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: campos[0]),
+                              const SizedBox(width: 12),
+                              Expanded(child: campos[1]),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 18),
+
+                // Seção: Documentos
+                _tituloSecao('DOCUMENTOS'),
+                _cartaoSecao(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline_rounded,
+                              size: 16,
+                              color: PainelAdminTheme.textoSecundario),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'PDF ou imagem (máx. 20 MB). Os arquivos só serão gravados ao clicar em "Salvar alterações".',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 11.5,
+                                color: PainelAdminTheme.textoSecundario,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      _linhaDoc(
+                        chave: 'doc',
+                        titulo: 'CNH / Documento pessoal',
+                        url: _urlDoc,
+                        onTrocar: () => _trocarDoc('doc'),
+                      ),
+                      if (_veiculoTipo != 'Bicicleta')
+                        _linhaDoc(
+                          chave: 'crlv',
+                          titulo: 'CRLV do veículo',
+                          url: _urlCrlv,
+                          onTrocar: () => _trocarDoc('crlv'),
+                        ),
+                      _linhaDoc(
+                        chave: 'foto',
+                        titulo: 'Foto do veículo',
+                        url: _urlFotoVeiculo,
+                        onTrocar: () => _trocarDoc('foto'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const Divider(height: 1, color: _corBorda),
+        // Rodapé
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+          child: Row(
+            children: [
+              TextButton(
+                onPressed:
+                    _salvando ? null : () => Navigator.pop(context),
+                style: TextButton.styleFrom(
+                  foregroundColor: PainelAdminTheme.roxo,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  textStyle: GoogleFonts.plusJakartaSans(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                child: const Text('Cancelar'),
+              ),
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: _salvando ? null : _salvar,
+                icon: _salvando
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.save_rounded, size: 18),
+                label: Text(
+                  _salvando ? 'Salvando…' : 'Salvar alterações',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: PainelAdminTheme.laranja,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 18, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return TextEditingValue(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
     );
   }
 }

@@ -17,30 +17,29 @@ class IncomingDeliveryActionReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         when (intent.action) {
             IncomingDeliveryContract.ACTION_ACCEPT -> {
+                // Responde imediatamente: cancela a notificação, marca aceito
+                // e abre o radar. A callable roda em background — o
+                // Firestore stream mostra a verdade quando processar.
                 NotificationUtils.cancelIncomingNotification(context, orderId)
+                IncomingDeliveryFlowState.markAccepted(requestId)
+                val openIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(MainActivity.EXTRA_ABRIR_ENTREGADOR, true)
+                    putExtra(MainActivity.EXTRA_ORDER_ID, orderId)
+                }
+                context.startActivity(openIntent)
                 IncomingDeliveryRepository.aceitar(orderId) { ok, _ ->
-                    if (ok) {
-                        IncomingDeliveryFlowState.markAccepted(requestId)
-                    } else {
+                    if (!ok) {
                         IncomingDeliveryFlowState.markCancelled(requestId)
-                    }
-                    if (ok) {
-                        val openIntent = Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            putExtra(MainActivity.EXTRA_ABRIR_ENTREGADOR, true)
-                            putExtra(MainActivity.EXTRA_ORDER_ID, orderId)
-                        }
-                        context.startActivity(openIntent)
                     }
                     pendingResult.finish()
                 }
             }
             IncomingDeliveryContract.ACTION_REJECT -> {
                 NotificationUtils.cancelIncomingNotification(context, orderId)
+                IncomingDeliveryFlowState.markRejected(requestId)
                 IncomingDeliveryRepository.recusar(orderId) { ok, _ ->
-                    if (ok) {
-                        IncomingDeliveryFlowState.markRejected(requestId)
-                    } else {
+                    if (!ok) {
                         IncomingDeliveryFlowState.markCancelled(requestId)
                     }
                     pendingResult.finish()

@@ -110,6 +110,12 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
   String? _atualizacoesFetchErro;
   bool _atualizacoesCarregando = false;
   Timer? _atualizacoesPoll;
+  /// Incrementado a cada refresh do cache para notificar o diálogo aberto
+  /// (evita polling interno que causava piscar de cards).
+  final ValueNotifier<int> _atualizacoesVersao = ValueNotifier<int>(0);
+  /// Cache do Future de resolução de URL de documento por `documentPath`.
+  /// Evita que rebuilds disparem nova leitura (efeito "piscando" na preview).
+  final Map<String, Future<String>> _urlDocResolvidaCache = {};
 
   static const int _debounceBuscaMs = 350;
   static const int _itensPorPagina = 10;
@@ -205,11 +211,17 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
         }
       }
       if (!mounted) return;
+      // Limpa do cache de URL apenas os paths que sumiram (já não precisam
+      // mais ser re-resolvidos); mantém os que continuam pendentes para
+      // que o FutureBuilder não dispare nova leitura em rebuilds.
+      final pathsAtuais = list.map((e) => e.docRef.path).toSet();
+      _urlDocResolvidaCache.removeWhere((k, _) => !pathsAtuais.contains(k));
       setState(() {
         _atualizacoesDocsCache = list;
         _atualizacoesCarregando = false;
         _atualizacoesFetchErro = null;
       });
+      _atualizacoesVersao.value = _atualizacoesVersao.value + 1;
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -226,6 +238,7 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
     _debounceBusca?.cancel();
     _campoBuscaController.dispose();
     _tabController.dispose();
+    _atualizacoesVersao.dispose();
     super.dispose();
   }
 
@@ -295,6 +308,36 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
       q = q.where('cidade', whereIn: _cidadesDoGerente);
     }
     return q;
+  }
+
+  /// Aplica aprovação do cadastro do entregador — usado pelo fluxo novo em
+  /// que clicar em "Aprovar" já abre o modal de plano/taxa e salva tudo de
+  /// uma vez. Quando `planoId` é passado, também grava `plano_entregador_id`
+  /// junto com a mudança de status, para evitar que o admin esqueça de
+  /// configurar a taxa depois.
+  Future<void> _aplicarAprovacaoEntregador(
+    String entregadorId, {
+    String? planoId,
+  }) async {
+    final update = <String, dynamic>{
+      'entregador_status': 'aprovado',
+      'motivo_recusa': FieldValue.delete(),
+      'motivo_bloqueio': FieldValue.delete(),
+      'recusa_cadastro': FieldValue.delete(),
+      'status_conta': ContaBloqueioLojista.statusContaActive,
+      'block_active': false,
+      'block_type': FieldValue.delete(),
+      'block_reason': FieldValue.delete(),
+      'block_start_at': FieldValue.delete(),
+      'block_end_at': FieldValue.delete(),
+    };
+    if (planoId != null && planoId.trim().isNotEmpty) {
+      update['plano_entregador_id'] = planoId.trim();
+    }
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(entregadorId)
+        .update(update);
   }
 
   Future<void> _alterarStatusEntregador(
@@ -1340,6 +1383,7 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
     if (admin == null) return;
 
     setState(() => _docPendenteSalvandoPath = row.chaveUnica);
+    _atualizacoesVersao.value = _atualizacoesVersao.value + 1;
     try {
       final batch = FirebaseFirestore.instance.batch();
       batch.update(row.docRef, {
@@ -1377,7 +1421,10 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
       if (!mounted) return;
       mostrarSnackPainel(context, erro: true, mensagem: 'Erro: $e');
     } finally {
-      if (mounted) setState(() => _docPendenteSalvandoPath = null);
+      if (mounted) {
+        setState(() => _docPendenteSalvandoPath = null);
+        _atualizacoesVersao.value = _atualizacoesVersao.value + 1;
+      }
     }
   }
 
@@ -1388,6 +1435,7 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
     final admin = FirebaseAuth.instance.currentUser;
     if (admin == null) return;
     setState(() => _docPendenteSalvandoPath = row.chaveUnica);
+    _atualizacoesVersao.value = _atualizacoesVersao.value + 1;
     try {
       await row.docRef.update({
         'status': 'reprovado',
@@ -1410,7 +1458,10 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
       if (!mounted) return;
       mostrarSnackPainel(context, erro: true, mensagem: 'Erro: $e');
     } finally {
-      if (mounted) setState(() => _docPendenteSalvandoPath = null);
+      if (mounted) {
+        setState(() => _docPendenteSalvandoPath = null);
+        _atualizacoesVersao.value = _atualizacoesVersao.value + 1;
+      }
     }
   }
 
@@ -1541,25 +1592,44 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
         final users = ctxData?.users ?? {};
         final rotulosVeiculo = ctxData?.rotulosVeiculo ?? {};
 
-        final vis = brutos
-            .where((row) => users[row.uid] != null)
-            .toList();
+        // Agrupa docs pendentes por entregador (1 card por pessoa).
+        final agrupado = <String, List<_DocPendentePainel>>{};
+        for (final row in brutos) {
+          if (users[row.uid] == null) continue;
+          (agrupado[row.uid] ??= []).add(row);
+        }
+
+        final entregadores = agrupado.entries.toList()
+          ..sort((a, b) {
+            final ta = a.value
+                .map((d) => _millisFirestore(d.docData['atualizado_em']))
+                .fold<int>(0, (p, e) => e > p ? e : p);
+            final tb = b.value
+                .map((d) => _millisFirestore(d.docData['atualizado_em']))
+                .fold<int>(0, (p, e) => e > p ? e : p);
+            return tb.compareTo(ta);
+          });
 
         final filtrados = _busca.isEmpty
-            ? vis
-            : vis.where((row) {
-                final u = users[row.uid];
+            ? entregadores
+            : entregadores.where((e) {
+                final u = users[e.key];
                 if (u == null) return false;
                 final nome = _str(u['nome']).toLowerCase();
                 final cidade = _str(u['cidade']).toLowerCase();
-                final tipoDoc = row.tipo == 'cnh' ? 'cnh' : 'crlv';
-                final rv = row.tipo == 'crlv' && row.veiculoId != null
-                    ? _str(rotulosVeiculo['${row.uid}|${row.veiculoId}'])
-                        .toLowerCase()
-                    : '';
+                final tiposDoc = e.value
+                    .map((d) => d.tipo.toLowerCase())
+                    .join(' ');
+                final rv = e.value
+                    .where((d) =>
+                        d.tipo == 'crlv' && (d.veiculoId ?? '').isNotEmpty)
+                    .map((d) =>
+                        _str(rotulosVeiculo['${d.uid}|${d.veiculoId}'])
+                            .toLowerCase())
+                    .join(' ');
                 return nome.contains(_busca) ||
                     cidade.contains(_busca) ||
-                    tipoDoc.contains(_busca) ||
+                    tiposDoc.contains(_busca) ||
                     rv.contains(_busca);
               }).toList();
 
@@ -1664,14 +1734,18 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
             ),
             Expanded(
               child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(32, 16, 32, 16),
+                padding: const EdgeInsets.fromLTRB(32, 12, 32, 16),
                 itemCount: paginaItens.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (_, i) => _buildCardAtualizacaoDocumento(
-                  paginaItens[i],
-                  users[paginaItens[i].uid] ?? {},
-                  rotulosVeiculo,
-                ),
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final entry = paginaItens[i];
+                  return _buildCardEntregadorAtualizacao(
+                    uid: entry.key,
+                    docs: entry.value,
+                    userData: users[entry.key] ?? {},
+                    rotulosVeiculo: rotulosVeiculo,
+                  );
+                },
               ),
             ),
             _buildBarraPaginacaoEntregadores(
@@ -1681,6 +1755,198 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
               totalPaginas: totalPaginas,
             ),
           ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCardEntregadorAtualizacao({
+    required String uid,
+    required List<_DocPendentePainel> docs,
+    required Map<String, dynamic> userData,
+    required Map<String, String> rotulosVeiculo,
+  }) {
+    final nome = _str(userData['nome'], 'Sem nome');
+    final cidade = _str(userData['cidade']);
+    final fotoUrl = _str(userData['foto_url']);
+    final veiculoTipo = _str(userData['veiculoTipo']).trim();
+    final placa = _placaExibicao(userData);
+
+    final tipos = <String>{};
+    for (final d in docs) {
+      tipos.add(d.tipo == 'cnh' ? 'CNH' : 'CRLV');
+    }
+    final resumoTipos = tipos.toList()..sort();
+
+    final metaParts = <String>[
+      if (cidade.isNotEmpty) cidade,
+      if (veiculoTipo.isNotEmpty) veiculoTipo,
+      if (placa != 'S/ Placa') placa,
+    ];
+
+    final salvandoAqui = docs.any(
+      (d) => _docPendenteSalvandoPath == d.chaveUnica,
+    );
+
+    return Material(
+      color: Colors.white,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: salvandoAqui
+            ? null
+            : () => _abrirDialogoAtualizacoesEntregador(
+                  uid: uid,
+                  userData: userData,
+                  rotulosVeiculo: rotulosVeiculo,
+                ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  image: fotoUrl.isNotEmpty
+                      ? DecorationImage(
+                          image: NetworkImage(fotoUrl),
+                          fit: BoxFit.cover,
+                        )
+                      : null,
+                ),
+                alignment: Alignment.center,
+                child: fotoUrl.isEmpty
+                    ? Icon(
+                        Icons.delivery_dining_rounded,
+                        size: 22,
+                        color: PainelAdminTheme.textoSecundario,
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      nome,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: PainelAdminTheme.dashboardInk,
+                      ),
+                    ),
+                    if (metaParts.isNotEmpty) const SizedBox(height: 2),
+                    if (metaParts.isNotEmpty)
+                      Text(
+                        metaParts.join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 12,
+                          color: PainelAdminTheme.textoSecundario,
+                          height: 1.3,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _chipContagemPendencias(
+                total: docs.length,
+                tipos: resumoTipos,
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 22,
+                color: PainelAdminTheme.textoSecundario,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chipContagemPendencias({
+    required int total,
+    required List<String> tipos,
+  }) {
+    final rotulo = total == 1
+        ? '1 documento · ${tipos.join(' + ')}'
+        : '$total documentos · ${tipos.join(' + ')}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFFED7AA)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              color: Color(0xFFF59E0B),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            rotulo,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFFB45309),
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _abrirDialogoAtualizacoesEntregador({
+    required String uid,
+    required Map<String, dynamic> userData,
+    required Map<String, String> rotulosVeiculo,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        return _DialogoAtualizacoesEntregador(
+          uid: uid,
+          userData: userData,
+          rotulosVeiculo: rotulosVeiculo,
+          versao: _atualizacoesVersao,
+          buildCardDoc: (row) => _buildCardAtualizacaoDocumento(
+            row,
+            userData,
+            rotulosVeiculo,
+          ),
+          lerPendenciasAtuais: () {
+            return (_atualizacoesDocsCache ?? [])
+                .where((d) => d.uid == uid)
+                .toList()
+              ..sort((a, b) => _millisFirestore(b.docData['atualizado_em'])
+                  .compareTo(_millisFirestore(a.docData['atualizado_em'])));
+          },
         );
       },
     );
@@ -1703,239 +1969,330 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
       subt = 'Documento pessoal';
     }
     final rawUrl = _str(row.docData['url']);
-    final urlFuture = _resolverUrlDocumento(rawUrl);
+    final urlFuture = _urlDocResolvidaCache.putIfAbsent(
+      row.docRef.path,
+      () => _resolverUrlDocumento(rawUrl),
+    );
+
+    final metaParts = <String>[
+      if (cidade.isNotEmpty) cidade,
+      tipoLabel,
+      subt,
+    ];
 
     return Material(
       color: Colors.white,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: Color(0xFFE2E8F0)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.all(12),
+        child: FutureBuilder<String>(
+          future: urlFuture,
+          builder: (context, snap) {
+            final url = (snap.data ?? '').trim();
+            final carregando = snap.connectionState == ConnectionState.waiting;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                _buildThumbAtualizacao(
+                  url: url,
+                  carregando: carregando,
+                  tipoLabel: tipoLabel,
+                  nome: nome,
+                ),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              nome,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                color: PainelAdminTheme.dashboardInk,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _pillEmAnalise(),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
                       Text(
-                        nome,
+                        metaParts.join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: PainelAdminTheme.dashboardInk,
+                          fontSize: 12,
+                          color: PainelAdminTheme.textoSecundario,
+                          height: 1.3,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '$cidade · $tipoLabel · $subt',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 13,
-                          color: PainelAdminTheme.textoSecundario,
-                        ),
+                      const SizedBox(height: 10),
+                      _buildAcoesAtualizacao(
+                        row: row,
+                        url: url,
+                        salvando: salvando,
+                        carregando: carregando,
                       ),
                     ],
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF7ED),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFFED7AA)),
-                  ),
-                  child: Text(
-                    'Em análise',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFFD97706),
-                    ),
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 14),
-            FutureBuilder<String>(
-              future: urlFuture,
-              builder: (context, snap) {
-                final url = (snap.data ?? '').trim();
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 120,
-                    child: Center(
-                      child: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                  );
-                }
-                if (url.isEmpty) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'URL ausente.',
-                        style: GoogleFonts.plusJakartaSans(
-                            fontStyle: FontStyle.italic,
-                            color: PainelAdminTheme.textoSecundario),
-                      ),
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          FilledButton.icon(
-                            onPressed: salvando
-                                ? null
-                                : () => _aprovarDocumentoPendente(row),
-                            icon: salvando
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white))
-                                : const Icon(Icons.check_rounded, size: 18),
-                            label: const Text('Aprovar'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF059669),
-                            ),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: salvando
-                                ? null
-                                : () =>
-                                    _mostrarDialogoReprovarDocumento(row),
-                            icon: const Icon(Icons.close_rounded, size: 18),
-                            label: const Text('Reprovar'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFFDC2626),
-                              side: const BorderSide(color: Color(0xFFFECACA)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                }
-                Widget preview;
-                if (_ehPdf(url)) {
-                  preview = ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(
-                      height: 220,
-                      child: buildPdfPreview(url, height: 220),
-                    ),
-                  );
-                } else {
-                  preview = ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Material(
-                      color: const Color(0xFFF8FAFC),
-                      child: InkWell(
-                        onTap: () =>
-                            _mostrarImagemAmpliada(url, '$tipoLabel — $nome'),
-                        child: Image.network(
-                          url,
-                          height: 200,
-                          fit: BoxFit.contain,
-                          webHtmlElementStrategy: kIsWeb
-                              ? WebHtmlElementStrategy.prefer
-                              : WebHtmlElementStrategy.never,
-                          loadingBuilder: (_, child, p) => p == null
-                              ? child
-                              : const SizedBox(
-                                  height: 200,
-                                  child: Center(
-                                      child: CircularProgressIndicator()),
-                                ),
-                          errorBuilder: (context, error, stackTrace) =>
-                              const Padding(
-                            padding: EdgeInsets.all(24),
-                            child: Text('Não foi possível carregar a imagem.'),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    preview,
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: salvando
-                              ? null
-                              : () async {
-                                  final u = Uri.tryParse(url);
-                                  if (u == null) return;
-                                  if (!await launchUrl(u,
-                                      mode:
-                                          LaunchMode.externalApplication)) {
-                                    if (context.mounted) {
-                                      mostrarSnackPainel(context,
-                                          erro: true,
-                                          mensagem:
-                                              'Não foi possível abrir o link.');
-                                    }
-                                  }
-                                },
-                          icon:
-                              const Icon(Icons.open_in_new_rounded, size: 18),
-                          label: const Text('Abrir em nova aba'),
-                        ),
-                        FilledButton.icon(
-                          onPressed: salvando
-                              ? null
-                              : () => _aprovarDocumentoPendente(row),
-                          icon: salvando
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white))
-                              : const Icon(Icons.check_rounded, size: 18),
-                          label: const Text('Aprovar'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF059669),
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: salvando
-                              ? null
-                              : () =>
-                                  _mostrarDialogoReprovarDocumento(row),
-                          icon: const Icon(Icons.close_rounded, size: 18),
-                          label: const Text('Reprovar'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFDC2626),
-                            side: const BorderSide(color: Color(0xFFFECACA)),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
+            );
+          },
         ),
       ),
+    );
+  }
+
+  Widget _pillEmAnalise() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFFED7AA)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              color: Color(0xFFF59E0B),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Em análise',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFFB45309),
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThumbAtualizacao({
+    required String url,
+    required bool carregando,
+    required String tipoLabel,
+    required String nome,
+  }) {
+    const double w = 84;
+    const double h = 84;
+
+    BoxDecoration frame() => BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        );
+
+    if (carregando) {
+      return Container(
+        width: w,
+        height: h,
+        decoration: frame(),
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
+    if (url.isEmpty) {
+      return Container(
+        width: w,
+        height: h,
+        decoration: frame(),
+        alignment: Alignment.center,
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          size: 26,
+          color: PainelAdminTheme.textoSecundario,
+        ),
+      );
+    }
+
+    if (_ehPdf(url)) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () async {
+          final u = Uri.tryParse(url);
+          if (u == null) return;
+          await launchUrl(u, mode: LaunchMode.externalApplication);
+        },
+        child: Container(
+          width: w,
+          height: h,
+          decoration: frame(),
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.picture_as_pdf_rounded,
+                size: 30,
+                color: const Color(0xFFDC2626),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'PDF',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: PainelAdminTheme.textoSecundario,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _mostrarImagemAmpliada(url, '$tipoLabel — $nome'),
+      child: Container(
+        width: w,
+        height: h,
+        decoration: frame(),
+        clipBehavior: Clip.antiAlias,
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          webHtmlElementStrategy:
+              kIsWeb ? WebHtmlElementStrategy.prefer : WebHtmlElementStrategy.never,
+          loadingBuilder: (_, child, p) => p == null
+              ? child
+              : const Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+          errorBuilder: (_, __, ___) => Icon(
+            Icons.broken_image_outlined,
+            size: 26,
+            color: PainelAdminTheme.textoSecundario,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAcoesAtualizacao({
+    required _DocPendentePainel row,
+    required String url,
+    required bool salvando,
+    required bool carregando,
+  }) {
+    final temUrl = url.isNotEmpty;
+    final desabilitado = salvando || carregando;
+    final verde = const Color(0xFF059669);
+    final vermelho = const Color(0xFFDC2626);
+
+    ButtonStyle styleBase({required Color fg, Color? border}) =>
+        OutlinedButton.styleFrom(
+          foregroundColor: fg,
+          side: BorderSide(color: border ?? fg.withValues(alpha: 0.25)),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          minimumSize: const Size(0, 32),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          textStyle: GoogleFonts.plusJakartaSans(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        );
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          onPressed: !temUrl || desabilitado
+              ? null
+              : () async {
+                  final u = Uri.tryParse(url);
+                  if (u == null) return;
+                  if (!await launchUrl(u,
+                      mode: LaunchMode.externalApplication)) {
+                    if (context.mounted) {
+                      mostrarSnackPainel(context,
+                          erro: true,
+                          mensagem: 'Não foi possível abrir o link.');
+                    }
+                  }
+                },
+          icon: const Icon(Icons.open_in_new_rounded, size: 15),
+          label: const Text('Abrir em nova aba'),
+          style: styleBase(
+            fg: PainelAdminTheme.dashboardInk,
+            border: const Color(0xFFCBD5E1),
+          ),
+        ),
+        FilledButton.icon(
+          onPressed:
+              desabilitado ? null : () => _aprovarDocumentoPendente(row),
+          icon: salvando
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.check_rounded, size: 15),
+          label: const Text('Aprovar'),
+          style: FilledButton.styleFrom(
+            backgroundColor: verde,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+            textStyle: GoogleFonts.plusJakartaSans(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: desabilitado
+              ? null
+              : () => _mostrarDialogoReprovarDocumento(row),
+          icon: const Icon(Icons.close_rounded, size: 15),
+          label: const Text('Reprovar'),
+          style: styleBase(fg: vermelho, border: const Color(0xFFFECACA)),
+        ),
+      ],
     );
   }
 
@@ -2003,168 +2360,313 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
             ? 'Inadimplência'
             : null);
 
+    final bool temMotivoRecusa = motivoRecusa.isNotEmpty &&
+        (status == 'bloqueado' ||
+            ContaBloqueioEntregadorHelper
+                .entregadorRecusadoSomenteCorrecaoCadastro(dados));
+
+    final List<Widget> acoes = <Widget>[];
+    if ((status == 'bloqueado' || status == 'aprovado') && bloqOp) {
+      acoes.add(_acaoCompacta(
+        icone: Icons.lock_open_rounded,
+        rotulo: 'Desbloquear',
+        cor: const Color(0xFF059669),
+        preenchido: true,
+        onTap: () => _desbloquearEntregador(doc.id, nome),
+      ));
+    }
+    if (status == 'pendente') {
+      acoes.addAll([
+        _acaoCompacta(
+          icone: Icons.description_outlined,
+          rotulo: 'Documentos',
+          cor: const Color(0xFF3B82F6),
+          onTap: () => _mostrarDocumentosModal(dados),
+        ),
+        _acaoCompacta(
+          icone: Icons.check_circle_outline_rounded,
+          rotulo: 'Aprovar',
+          cor: const Color(0xFF059669),
+          preenchido: true,
+          onTap: () => _atribuirPlanoModal(
+            doc.id,
+            nome,
+            planoId?.toString(),
+            cidade,
+            veiculo,
+            modoAprovar: true,
+          ),
+        ),
+        _acaoCompacta(
+          icone: Icons.close_rounded,
+          rotulo: 'Recusar',
+          cor: const Color(0xFFDC2626),
+          onTap: () => _mostrarModalRecusaEntregador(doc.id, nome),
+        ),
+      ]);
+    } else {
+      acoes.add(_buildMaisAcoesEntregadorMenu(
+        doc: doc,
+        dados: dados,
+        nomeEntregador: nome,
+        planoId: planoId,
+        cidade: cidade,
+        veiculo: veiculo,
+        incluirPlanoTaxaEBloquear: status == 'aprovado' && !bloqOp,
+      ));
+    }
+
+    final Color borderHighlight = status == 'pendente'
+        ? info.borderColor.withValues(alpha: 0.75)
+        : const Color(0xFFE6EAF0);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderHighlight),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 12,
-              offset: const Offset(0, 4)),
+            color: Colors.black.withValues(alpha: 0.025),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: info.bgColor,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: info.borderColor),
-                image: fotoUrl.isNotEmpty
-                    ? DecorationImage(
-                        image: NetworkImage(fotoUrl), fit: BoxFit.cover)
-                    : null,
-              ),
-              child: fotoUrl.isEmpty
-                  ? Icon(Icons.delivery_dining_rounded,
-                      color: info.color, size: 26)
-                  : null,
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Expanded(
-                      child: Text(nome,
-                          style: GoogleFonts.plusJakartaSans(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: PainelAdminTheme.dashboardInk),
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: info.bgColor,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: info.borderColor)),
-                      child: Text(info.label,
-                          style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: info.color)),
-                    ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 16, runSpacing: 6, children: [
-                    _metaChip(Icons.location_on_outlined, cidade.toUpperCase()),
-                    _metaChip(
-                        Icons.two_wheeler_outlined, '$veiculo ($placa)'),
-                    if (status == 'aprovado')
-                      _metaChip(
-                          Icons.receipt_long_outlined,
-                          planoId != null ? 'Plano ativo' : 'Sem plano',
-                          highlight: planoId == null),
-                    if (chipBloqueio != null)
-                      _metaChip(Icons.schedule_rounded, chipBloqueio,
-                          highlight: true),
-                    if (fimTemp != null &&
-                        slPainel ==
-                            ContaBloqueioLojista.statusLojaBloqueioTemporario)
-                      _metaChip(
-                        Icons.event_outlined,
-                        'Até ${fimTemp.day.toString().padLeft(2, '0')}/${fimTemp.month.toString().padLeft(2, '0')}/${fimTemp.year}',
-                      ),
-                  ]),
-                  if (motivoRecusa.isNotEmpty &&
-                      (status == 'bloqueado' ||
-                          ContaBloqueioEntregadorHelper
-                              .entregadorRecusadoSomenteCorrecaoCadastro(
-                                  dados))) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                          color: const Color(0xFFFEF2F2),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                              color: const Color(0xFFFECACA))),
-                      child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.info_outline_rounded,
-                                size: 16, color: Color(0xFFDC2626)),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(motivoRecusa,
-                                  style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 12,
-                                      color: const Color(0xFF991B1B),
-                                      height: 1.4)),
-                            ),
-                          ]),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: LayoutBuilder(
+          builder: (ctx, c) {
+            final bool compacto = c.maxWidth < 780;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if ((status == 'bloqueado' || status == 'aprovado') &&
-                    bloqOp) ...[
-                  _actionBtn(Icons.lock_open_rounded, 'Desbloquear',
-                      const Color(0xFF059669),
-                      filled: true,
-                      onTap: () => _desbloquearEntregador(doc.id, nome)),
-                  const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: info.bgColor,
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: info.borderColor),
+                        image: fotoUrl.isNotEmpty
+                            ? DecorationImage(
+                                image: NetworkImage(fotoUrl),
+                                fit: BoxFit.cover,
+                              )
+                            : null,
+                      ),
+                      child: fotoUrl.isEmpty
+                          ? Icon(
+                              Icons.delivery_dining_rounded,
+                              color: info.color,
+                              size: 20,
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  nome,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 14.5,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.1,
+                                    color: PainelAdminTheme.dashboardInk,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _statusPillCompacto(info),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 2,
+                            children: [
+                              _metaChip(
+                                Icons.location_on_outlined,
+                                cidade.toUpperCase(),
+                              ),
+                              _metaChip(
+                                Icons.two_wheeler_outlined,
+                                '$veiculo · $placa',
+                              ),
+                              if (status == 'aprovado')
+                                _metaChip(
+                                  Icons.receipt_long_outlined,
+                                  planoId != null ? 'Plano ativo' : 'Sem plano',
+                                  highlight: planoId == null,
+                                ),
+                              if (chipBloqueio != null)
+                                _metaChip(
+                                  Icons.schedule_rounded,
+                                  chipBloqueio,
+                                  highlight: true,
+                                ),
+                              if (fimTemp != null &&
+                                  slPainel ==
+                                      ContaBloqueioLojista
+                                          .statusLojaBloqueioTemporario)
+                                _metaChip(
+                                  Icons.event_outlined,
+                                  'Até ${fimTemp.day.toString().padLeft(2, '0')}/${fimTemp.month.toString().padLeft(2, '0')}/${fimTemp.year}',
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!compacto) ...[
+                      const SizedBox(width: 12),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: _intercalar(acoes, const SizedBox(width: 6)),
+                      ),
+                    ],
+                  ],
+                ),
+                if (compacto) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: acoes,
+                  ),
                 ],
-                if (status == 'pendente') ...[
-                  _actionBtn(Icons.description_outlined, 'Documentos',
-                      const Color(0xFF3B82F6),
-                      onTap: () => _mostrarDocumentosModal(dados)),
-                  const SizedBox(height: 8),
-                  _actionBtn(
-                      Icons.check_circle_outline_rounded,
-                      'Aprovar',
-                      const Color(0xFF059669),
-                      filled: true,
-                      onTap: () =>
-                          _alterarStatusEntregador(doc.id, 'aprovado')),
-                  const SizedBox(height: 8),
-                  _actionBtn(Icons.close_rounded, 'Recusar',
-                      const Color(0xFFDC2626),
-                      onTap: () =>
-                          _mostrarModalRecusaEntregador(doc.id, nome)),
-                ] else ...[
-                  _buildMaisAcoesEntregadorMenu(
-                    doc: doc,
-                    dados: dados,
-                    nomeEntregador: nome,
-                    planoId: planoId,
-                    cidade: cidade,
-                    veiculo: veiculo,
-                    incluirPlanoTaxaEBloquear:
-                        status == 'aprovado' && !bloqOp,
+                if (temMotivoRecusa) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: const Color(0xFFFECACA)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.info_outline_rounded,
+                            size: 14, color: Color(0xFFDC2626)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            motivoRecusa,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11.5,
+                              color: const Color(0xFF991B1B),
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
+  }
+
+  /// Pill de status compacto (substitui a pill maior do card antigo).
+  Widget _statusPillCompacto(_StatusVisual info) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: info.bgColor,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: info.borderColor),
+      ),
+      child: Text(
+        info.label,
+        style: GoogleFonts.plusJakartaSans(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.15,
+          color: info.color,
+        ),
+      ),
+    );
+  }
+
+  /// Botão de ação compacto usado na linha do card de entregador.
+  /// Substitui as pílulas de 130x34 por um botão denso (altura 30).
+  Widget _acaoCompacta({
+    required IconData icone,
+    required String rotulo,
+    required Color cor,
+    required VoidCallback onTap,
+    bool preenchido = false,
+  }) {
+    final estiloBase = ButtonStyle(
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 11),
+      ),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      ),
+      minimumSize: const WidgetStatePropertyAll(Size(0, 30)),
+      textStyle: WidgetStatePropertyAll(
+        GoogleFonts.plusJakartaSans(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.1,
+        ),
+      ),
+    );
+    final icone16 = Icon(icone, size: 14);
+    return SizedBox(
+      height: 30,
+      child: preenchido
+          ? FilledButton.icon(
+              onPressed: onTap,
+              icon: icone16,
+              label: Text(rotulo),
+              style: estiloBase.copyWith(
+                backgroundColor: WidgetStatePropertyAll(cor),
+                foregroundColor: const WidgetStatePropertyAll(Colors.white),
+              ),
+            )
+          : OutlinedButton.icon(
+              onPressed: onTap,
+              icon: icone16,
+              label: Text(rotulo),
+              style: estiloBase.copyWith(
+                foregroundColor: WidgetStatePropertyAll(cor),
+                side: WidgetStatePropertyAll(
+                  BorderSide(color: cor.withValues(alpha: 0.38)),
+                ),
+              ),
+            ),
+    );
+  }
+
+  List<Widget> _intercalar(List<Widget> items, Widget separator) {
+    if (items.length <= 1) return items;
+    final out = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      out.add(items[i]);
+      if (i < items.length - 1) out.add(separator);
+    }
+    return out;
   }
 
   Widget _buildMaisAcoesEntregadorMenu({
@@ -2277,18 +2779,18 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
         return entries;
       },
       child: Container(
-        width: 42,
-        height: 42,
+        width: 30,
+        height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: const Color(0xFFF1F5F9),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(9),
           border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
         child: const Icon(
-          Icons.more_vert_rounded,
-          size: 22,
-          color: Color(0xFF64748B),
+          Icons.more_horiz_rounded,
+          size: 18,
+          color: Color(0xFF475569),
         ),
       ),
     );
@@ -2299,43 +2801,15 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
         ? const Color(0xFFD97706)
         : PainelAdminTheme.textoSecundario;
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(icon, size: 15, color: c),
-      const SizedBox(width: 5),
+      Icon(icon, size: 13, color: c),
+      const SizedBox(width: 4),
       Text(text,
           style: GoogleFonts.plusJakartaSans(
-              fontSize: 13,
+              fontSize: 11.5,
               color: c,
-              fontWeight: highlight ? FontWeight.w600 : FontWeight.w500)),
+              letterSpacing: 0.1,
+              fontWeight: highlight ? FontWeight.w700 : FontWeight.w600)),
     ]);
-  }
-
-  Widget _actionBtn(IconData icon, String label, Color color,
-      {required VoidCallback onTap, bool filled = false}) {
-    return SizedBox(
-      width: 130,
-      height: 34,
-      child: filled
-          ? FilledButton.icon(
-              onPressed: onTap,
-              icon: Icon(icon, size: 16),
-              label: Text(label, style: const TextStyle(fontSize: 12)),
-              style: FilledButton.styleFrom(
-                  backgroundColor: color,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10))))
-          : OutlinedButton.icon(
-              onPressed: onTap,
-              icon: Icon(icon, size: 16),
-              label: Text(label, style: const TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: color,
-                  side: BorderSide(color: color.withValues(alpha: 0.35)),
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)))),
-    );
   }
 
   bool _ehPdf(String url) {
@@ -2425,6 +2899,9 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
         _resolverUrlDocumento(_str(dados['url_doc_pessoal']));
     final crlvFuture = _resolverUrlDocumento(_str(dados['url_crlv']));
     final fotoVeiculoFuture = _resolverUrlDocumento(_urlFotoVeiculo(dados));
+    final selfieFuture =
+        _resolverUrlDocumento(_str(dados['url_selfie_entregador']));
+    final selfieTravada = dados['selfie_bloqueada'] == true;
 
     showDialog(
       context: context,
@@ -2508,6 +2985,12 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                           ),
                         ),
                         const SizedBox(height: 24),
+                        _buildDocAsync(
+                          selfieTravada
+                              ? 'Selfie de verificação (travada — foto de perfil)'
+                              : 'Selfie de verificação (câmera do entregador)',
+                          selfieFuture,
+                        ),
                         _buildDocAsync(
                           'Documento pessoal (CNH/RG)',
                           docPessoalFuture,
@@ -2881,8 +3364,12 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
     String nomeEntregador,
     String? planoAtualId,
     String cidadeOrigem,
-    String veiculoTipo,
-  ) {
+    String veiculoTipo, {
+    // Quando `true`, o diálogo é usado no fluxo de APROVAÇÃO do cadastro:
+    // salvar aplica `entregador_status: aprovado` + faxina dos campos de
+    // recusa/bloqueio + `plano_entregador_id`. Também muda textos e botões.
+    bool modoAprovar = false,
+  }) {
     String? planoSelecionado = planoAtualId;
     bool isLoading = false;
 
@@ -2923,15 +3410,25 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: PainelAdminTheme.roxo.withValues(alpha: 0.1),
+                          color: (modoAprovar
+                                  ? const Color(0xFF059669)
+                                  : PainelAdminTheme.roxo)
+                              .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
-                            color: PainelAdminTheme.roxo.withValues(alpha: 0.15),
+                            color: (modoAprovar
+                                    ? const Color(0xFF059669)
+                                    : PainelAdminTheme.roxo)
+                                .withValues(alpha: 0.2),
                           ),
                         ),
                         child: Icon(
-                          Icons.tune_rounded,
-                          color: PainelAdminTheme.roxo,
+                          modoAprovar
+                              ? Icons.verified_rounded
+                              : Icons.tune_rounded,
+                          color: modoAprovar
+                              ? const Color(0xFF059669)
+                              : PainelAdminTheme.roxo,
                           size: 26,
                         ),
                       ),
@@ -2941,7 +3438,9 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Definir plano',
+                              modoAprovar
+                                  ? 'Aprovar entregador'
+                                  : 'Definir plano',
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 19,
                                 fontWeight: FontWeight.w800,
@@ -2951,7 +3450,9 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              nomeEntregador,
+                              modoAprovar
+                                  ? '$nomeEntregador · escolha o plano de comissão'
+                                  : nomeEntregador,
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 13.5,
                                 height: 1.35,
@@ -3094,25 +3595,99 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                                   color: const Color(0xFFFDE68A),
                                 ),
                               ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
                                 children: [
-                                  Icon(
-                                    Icons.info_outline_rounded,
-                                    size: 22,
-                                    color: const Color(0xFFD97706),
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        Icons.info_outline_rounded,
+                                        size: 22,
+                                        color: const Color(0xFFD97706),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          modoAprovar
+                                              ? 'Nenhum plano de comissão disponível para esta cidade e veículo. Você pode aprovar o cadastro agora e configurar o plano depois em Aprovados → Plano/Taxa, ou cadastrar o plano antes em Configurações → Planos.'
+                                              : 'Não há planos para esta cidade e tipo de veículo. Cadastre em Configurações → planos (público: entregador) ou ajuste o cadastro.',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 13,
+                                            height: 1.45,
+                                            color: const Color(0xFF92400E),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      'Não há planos para esta cidade e tipo de veículo. Cadastre em Configurações → planos (público: entregador) ou ajuste o cadastro.',
-                                      style: GoogleFonts.plusJakartaSans(
-                                        fontSize: 13,
-                                        height: 1.45,
-                                        color: const Color(0xFF92400E),
+                                  if (modoAprovar) ...[
+                                    const SizedBox(height: 14),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: FilledButton.icon(
+                                        onPressed: isLoading
+                                            ? null
+                                            : () async {
+                                                setS(() => isLoading = true);
+                                                try {
+                                                  await _aplicarAprovacaoEntregador(
+                                                    entregadorId,
+                                                    planoId: null,
+                                                  );
+                                                  if (ctx.mounted) {
+                                                    Navigator.pop(ctx);
+                                                  }
+                                                  if (!mounted) return;
+                                                  mostrarSnackPainel(
+                                                    context,
+                                                    mensagem:
+                                                        'Entregador aprovado. Configure o plano depois em Aprovados.',
+                                                  );
+                                                } catch (e) {
+                                                  if (!mounted) return;
+                                                  mostrarSnackPainel(
+                                                    context,
+                                                    erro: true,
+                                                    mensagem: 'Erro: $e',
+                                                  );
+                                                } finally {
+                                                  if (ctx.mounted) {
+                                                    setS(() => isLoading =
+                                                        false);
+                                                  }
+                                                }
+                                              },
+                                        icon: const Icon(
+                                          Icons.verified_rounded,
+                                          size: 18,
+                                        ),
+                                        label: Text(
+                                          'Aprovar sem plano',
+                                          style:
+                                              GoogleFonts.plusJakartaSans(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor:
+                                              const Color(0xFF059669),
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 10,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 ],
                               ),
                             );
@@ -3191,13 +3766,73 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'A taxa passa a valer para novas corridas conforme regras do plano.',
+                        modoAprovar
+                            ? 'Ao aprovar, o entregador é ativado e o plano passa a valer para novas corridas.'
+                            : 'A taxa passa a valer para novas corridas conforme regras do plano.',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 11.5,
                           height: 1.4,
                           color: PainelAdminTheme.textoSecundario,
                         ),
                       ),
+                      if (modoAprovar) ...[
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: isLoading
+                                ? null
+                                : () async {
+                                    setS(() => isLoading = true);
+                                    try {
+                                      await _aplicarAprovacaoEntregador(
+                                        entregadorId,
+                                        planoId: null,
+                                      );
+                                      if (ctx.mounted) Navigator.pop(ctx);
+                                      if (!mounted) return;
+                                      mostrarSnackPainel(
+                                        context,
+                                        mensagem:
+                                            'Entregador aprovado. Configure o plano depois em Aprovados.',
+                                      );
+                                    } catch (e) {
+                                      if (!mounted) return;
+                                      mostrarSnackPainel(
+                                        context,
+                                        erro: true,
+                                        mensagem: 'Erro: $e',
+                                      );
+                                    } finally {
+                                      if (ctx.mounted) {
+                                        setS(() => isLoading = false);
+                                      }
+                                    }
+                                  },
+                            icon: Icon(
+                              Icons.flash_on_rounded,
+                              size: 16,
+                              color: PainelAdminTheme.textoSecundario,
+                            ),
+                            label: Text(
+                              'Aprovar sem plano (configurar depois)',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: PainelAdminTheme.textoSecundario,
+                              ),
+                            ),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 4,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 22),
                       Row(
                         children: [
@@ -3238,20 +3873,29 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                                   : () async {
                                       setS(() => isLoading = true);
                                       try {
-                                        await FirebaseFirestore.instance
-                                            .collection('users')
-                                            .doc(entregadorId)
-                                            .update({
-                                          'plano_entregador_id': planoSelecionado,
-                                        });
+                                        if (modoAprovar) {
+                                          await _aplicarAprovacaoEntregador(
+                                            entregadorId,
+                                            planoId: planoSelecionado,
+                                          );
+                                        } else {
+                                          await FirebaseFirestore.instance
+                                              .collection('users')
+                                              .doc(entregadorId)
+                                              .update({
+                                            'plano_entregador_id':
+                                                planoSelecionado,
+                                          });
+                                        }
                                         if (ctx.mounted) {
                                           Navigator.pop(ctx);
                                         }
                                         if (!mounted) return;
                                         mostrarSnackPainel(
                                           context,
-                                          mensagem:
-                                              'Plano atribuído com sucesso!',
+                                          mensagem: modoAprovar
+                                              ? 'Entregador aprovado e plano aplicado!'
+                                              : 'Plano atribuído com sucesso!',
                                         );
                                       } catch (e) {
                                         if (!mounted) return;
@@ -3261,7 +3905,9 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                                           mensagem: 'Erro: $e',
                                         );
                                       } finally {
-                                        setS(() => isLoading = false);
+                                        if (ctx.mounted) {
+                                          setS(() => isLoading = false);
+                                        }
                                       }
                                     },
                               icon: isLoading
@@ -3273,20 +3919,32 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
                                         color: Colors.white,
                                       ),
                                     )
-                                  : const Icon(Icons.check_rounded, size: 20),
+                                  : Icon(
+                                      modoAprovar
+                                          ? Icons.verified_rounded
+                                          : Icons.check_rounded,
+                                      size: 20,
+                                    ),
                               label: Text(
-                                isLoading ? 'Salvando…' : 'Salvar plano',
+                                isLoading
+                                    ? 'Salvando…'
+                                    : (modoAprovar
+                                        ? 'Aprovar e aplicar plano'
+                                        : 'Salvar plano'),
                                 style: GoogleFonts.plusJakartaSans(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 14,
                                 ),
                               ),
                               style: FilledButton.styleFrom(
-                                backgroundColor: PainelAdminTheme.roxo,
+                                backgroundColor: modoAprovar
+                                    ? const Color(0xFF059669)
+                                    : PainelAdminTheme.roxo,
                                 foregroundColor: Colors.white,
-                                disabledBackgroundColor:
-                                    PainelAdminTheme.roxo.withValues(
-                                        alpha: 0.4),
+                                disabledBackgroundColor: (modoAprovar
+                                        ? const Color(0xFF059669)
+                                        : PainelAdminTheme.roxo)
+                                    .withValues(alpha: 0.4),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
@@ -3305,6 +3963,213 @@ class _EntregadoresScreenState extends State<EntregadoresScreen>
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Diálogo que lista os documentos pendentes de **um** entregador para
+/// aprovação/recusa. Usa o card compacto existente do parent
+/// ([`_buildCardAtualizacaoDocumento`]) e se autofecha quando a última
+/// pendência é resolvida.
+///
+/// Só rebuilda quando o `versao` (ValueNotifier) do parent é incrementado,
+/// evitando piscar dos previews ao aprovar/reprovar.
+class _DialogoAtualizacoesEntregador extends StatefulWidget {
+  const _DialogoAtualizacoesEntregador({
+    required this.uid,
+    required this.userData,
+    required this.rotulosVeiculo,
+    required this.versao,
+    required this.buildCardDoc,
+    required this.lerPendenciasAtuais,
+  });
+
+  final String uid;
+  final Map<String, dynamic> userData;
+  final Map<String, String> rotulosVeiculo;
+  final ValueNotifier<int> versao;
+  final Widget Function(_DocPendentePainel row) buildCardDoc;
+  final List<_DocPendentePainel> Function() lerPendenciasAtuais;
+
+  @override
+  State<_DialogoAtualizacoesEntregador> createState() =>
+      _DialogoAtualizacoesEntregadorState();
+}
+
+class _DialogoAtualizacoesEntregadorState
+    extends State<_DialogoAtualizacoesEntregador> {
+  @override
+  void initState() {
+    super.initState();
+    widget.versao.addListener(_onVersaoChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.versao.removeListener(_onVersaoChanged);
+    super.dispose();
+  }
+
+  void _onVersaoChanged() {
+    if (!mounted) return;
+    final pendencias = widget.lerPendenciasAtuais();
+    if (pendencias.isEmpty) {
+      // Agenda fechamento no próximo frame para não pop() durante build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+    } else {
+      setState(() {});
+    }
+  }
+
+  String _str(dynamic v, [String fallback = '']) {
+    if (v == null) return fallback;
+    if (v is String) return v;
+    try {
+      return v.toString();
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pendencias = widget.lerPendenciasAtuais();
+    final nome = _str(widget.userData['nome'], 'Sem nome');
+    final cidade = _str(widget.userData['cidade']);
+    final veiculoTipo = _str(widget.userData['veiculoTipo']).trim();
+    final placa = () {
+      for (final key in ['placa_veiculo', 'placa', 'placaVeiculo']) {
+        final s = _str(widget.userData[key]).trim();
+        if (s.isNotEmpty) return s.toUpperCase();
+      }
+      return '';
+    }();
+
+    final metaParts = <String>[
+      if (cidade.isNotEmpty) cidade,
+      if (veiculoTipo.isNotEmpty) veiculoTipo,
+      if (placa.isNotEmpty) placa,
+    ];
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
+      backgroundColor: Colors.white,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: PainelAdminTheme.roxo.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.fact_check_outlined,
+                      color: PainelAdminTheme.roxo,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Atualizações · $nome',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: PainelAdminTheme.dashboardInk,
+                          ),
+                        ),
+                        if (metaParts.isNotEmpty) const SizedBox(height: 2),
+                        if (metaParts.isNotEmpty)
+                          Text(
+                            metaParts.join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12.5,
+                              color: PainelAdminTheme.textoSecundario,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Fechar',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Color(0xFFE2E8F0)),
+            Flexible(
+              child: pendencias.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.check_circle_outline_rounded,
+                            size: 40,
+                            color: const Color(0xFF059669),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Nenhum documento pendente para este entregador.',
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              color: PainelAdminTheme.textoSecundario,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+                      itemCount: pendencias.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) => widget.buildCardDoc(pendencias[i]),
+                    ),
+            ),
+            const Divider(height: 1, color: Color(0xFFE2E8F0)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Fechar'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

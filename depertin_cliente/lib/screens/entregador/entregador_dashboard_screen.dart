@@ -21,6 +21,7 @@ import 'package:depertin_cliente/services/firebase_functions_config.dart';
 import 'package:depertin_cliente/services/permissoes_app_service.dart';
 import 'package:depertin_cliente/services/corrida_chamada_entregador_audio.dart';
 import 'package:depertin_cliente/services/acessibilidade_prefs_service.dart';
+import 'package:depertin_cliente/services/alerta_corrida_nativo.dart';
 import 'package:depertin_cliente/services/flash_alerta_corrida.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -237,6 +238,7 @@ class _EntregadorDashboardScreenState extends State<EntregadorDashboardScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    FlashAlertaCorrida.parar();
     unawaited(CorridaChamadaEntregadorAudio.parar());
     _audioPlayer.dispose();
     _pararRastreioGps();
@@ -1085,30 +1087,75 @@ class _EntregadorDashboardScreenState extends State<EntregadorDashboardScreen>
     if (seq > anterior) {
       _ultimaSeqSomPorPedido[pedidoId] = seq;
       unawaited(CorridaChamadaEntregadorAudio.tocarChamada());
+      // Ordem importante: a tela oficial nativa (IncomingDeliveryActivity) é
+      // o alerta visual primário. O overlay laranja do Flutter
+      // (`FlashAlertaCorrida`) só é acionado como fallback quando a tela
+      // nativa NÃO conseguiu abrir — assim evitamos o conflito visual de
+      // dois alertas fullscreen sobrepostos disputando o mesmo frame. O LED
+      // e a vibração (alertas de acessibilidade autênticos, funcionam com
+      // celular bloqueado/no bolso) sempre disparam.
       unawaited(_dispararAlertasAcessibilidade());
       unawaited(_abrirTelaOficialChamada(pedidoId, pedido));
     }
   }
 
+  /// Dispara os alertas nativos de acessibilidade (vibração em padrão e LED
+  /// da câmera). Esses alertas coexistem com a tela oficial nativa de
+  /// chamada sem conflito — são hardware, não widgets.
+  ///
+  /// O flash-overlay do Flutter (tela laranja piscando) NÃO é disparado aqui
+  /// justamente para evitar colisão com a `IncomingDeliveryActivity`
+  /// fullscreen. Ele é chamado apenas no fallback via
+  /// [_dispararOverlayFlashFallback], quando a tela nativa não pôde abrir.
   Future<void> _dispararAlertasAcessibilidade() async {
     try {
       final prefs = await AcessibilidadePrefsService.instance.lerCacheLocal();
       if (prefs.vibracao) {
-        await HapticFeedback.heavyImpact();
-        for (int i = 0; i < 4; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 280));
-          await HapticFeedback.vibrate();
+        // Vibração nativa em padrão longo (tipo chamada recebida). Usa o
+        // canal `dipertin.android/nav` → VibrationHelper no Kotlin, com a
+        // permissão android.permission.VIBRATE declarada no manifest.
+        // Funciona com celular bloqueado.
+        final ok = await AlertaCorridaNativo.vibrarPadraoChamada();
+        if (!ok) {
+          // Fallback para quando o MethodChannel não responder (dispositivo
+          // sem vibrador ou erro de permissão no momento).
+          await HapticFeedback.heavyImpact();
+          for (int i = 0; i < 4; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 280));
+            await HapticFeedback.vibrate();
+          }
         }
       }
-      if (prefs.flash && mounted) {
-        FlashAlertaCorrida.disparar(context: context);
+      if (prefs.flash) {
+        // LED da câmera piscando — funciona mesmo com a tela bloqueada e
+        // por trás da tela oficial nativa (IncomingDeliveryActivity). É o
+        // comportamento que as pessoas esperam quando marcam "Flash" em
+        // chamadas recebidas. O LED se encerra naturalmente ao fim das
+        // pulsações ou quando o entregador aceita/recusa pelo dashboard.
+        unawaited(AlertaCorridaNativo.piscarFlash());
       }
     } catch (e) {
       debugPrint('[alerta-acessibilidade] $e');
     }
   }
 
+  /// Fallback visual para quando a `IncomingDeliveryActivity` nativa não
+  /// pôde abrir (ex.: iOS, permissão de overlay negada em algum OEM, falha
+  /// no intent). Pisca o overlay laranja do Flutter para garantir ao menos
+  /// um sinal visual da chamada — só respeitado se o usuário ativou flash.
+  Future<void> _dispararOverlayFlashFallback() async {
+    try {
+      final prefs = await AcessibilidadePrefsService.instance.lerCacheLocal();
+      if (!prefs.flash) return;
+      if (!mounted) return;
+      FlashAlertaCorrida.disparar(context: context);
+    } catch (e) {
+      debugPrint('[alerta-acessibilidade:overlay-fallback] $e');
+    }
+  }
+
   Future<void> _pararSomChamada() async {
+    FlashAlertaCorrida.parar();
     await CorridaChamadaEntregadorAudio.parar();
   }
 
@@ -1170,14 +1217,23 @@ class _EntregadorDashboardScreenState extends State<EntregadorDashboardScreen>
     final abriu = await AndroidNavIntent.openIncomingDeliveryScreen(payload);
     if (abriu) {
       _ultimaSeqTelaOficialPorPedido[pedidoId] = seqAtual;
+      // A partir daqui a tela nativa assume o alerta visual da chamada.
+      // Preservamos vibração e LED (acessibilidade) — silenciamos só o MP3
+      // + notificação para não haver toque duplicado.
       await CorridaChamadaEntregadorAudio.silenciarAlertaCorridaCompleto(pedidoId);
       return;
     }
+    // A tela nativa não pôde abrir (iOS, OEM sem permissão fullscreen-intent
+    // etc.). Para garantir reforço visual ao entregador que ativou flash,
+    // acionamos o overlay laranja do Flutter como substituto.
     _requestsComTelaOficialAberta.remove(requestId);
+    unawaited(_dispararOverlayFlashFallback());
   }
 
   Future<void> _recusarOferta(String pedidoId) async {
     if (_recusandoPedidoId == pedidoId) return;
+    FlashAlertaCorrida.parar();
+    await CorridaChamadaEntregadorAudio.parar();
     await CorridaChamadaEntregadorAudio.silenciarAlertaCorridaCompleto(pedidoId);
     if (mounted) {
       setState(() {

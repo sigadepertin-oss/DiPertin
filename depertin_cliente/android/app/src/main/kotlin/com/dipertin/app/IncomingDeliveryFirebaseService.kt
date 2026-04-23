@@ -3,6 +3,7 @@ package com.dipertin.app
 import android.app.NotificationManager
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.google.firebase.messaging.RemoteMessage
 import io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService
@@ -93,7 +94,36 @@ class IncomingDeliveryFirebaseService : FlutterFirebaseMessagingService() {
                     NotificationUtils.cancelIncomingNotification(this, orderId)
                     openIncomingDeliveryScreen(data)
                 } else {
+                    // Primeiro publica a notificação com fullScreenIntent — é a
+                    // rota "oficial" e funciona na maioria dos cenários.
                     CorridaIncomingNotifier.show(this, data, message.messageId)
+
+                    // Fallback de segurança para Android 14+ ou OEMs agressivos,
+                    // onde `setFullScreenIntent` pode ser rebaixado para heads-up
+                    // e a activity não abre sozinha na tela bloqueada. Se temos
+                    // permissão de overlay (SYSTEM_ALERT_WINDOW) OU o
+                    // FloatingIconService está ativo (foreground service), o
+                    // Android permite que iniciemos a activity a partir do
+                    // background — a `IncomingDeliveryActivity` tem
+                    // showWhenLocked/turnScreenOn e cuida do resto.
+                    val canOverlay = try {
+                        Settings.canDrawOverlays(this)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    val floatingAtivo = FloatingIconService.isRunning
+                    if (!canFullScreen || canOverlay || floatingAtivo) {
+                        try {
+                            Log.i(
+                                tag,
+                                "Fallback: abrindo IncomingDeliveryActivity direto " +
+                                    "(canFullScreen=$canFullScreen canOverlay=$canOverlay floating=$floatingAtivo)",
+                            )
+                            openIncomingDeliveryScreen(data)
+                        } catch (e: Exception) {
+                            Log.w(tag, "Falha fallback openIncomingDeliveryScreen: ${e.message}")
+                        }
+                    }
                 }
                 Log.i(tag, "FCM corrida — fim (plugin Flutter não recebe este push).")
                 return

@@ -72,6 +72,7 @@ class CartProvider with ChangeNotifier {
           lojaNome: product.lojaNome,
           imagem: product.imagem,
           quantidade: quantidade,
+          requerVeiculoGrande: product.requerVeiculoGrande,
         ),
       );
     }

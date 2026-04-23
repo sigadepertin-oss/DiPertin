@@ -3,6 +3,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/biometria_service.dart';
+
 const Color _diPertinRoxo = Color(0xFF6A1B9A);
 const Color _diPertinLaranja = Color(0xFFFF8F00);
 const Color _fundoTela = Color(0xFFF5F4F8);
@@ -186,6 +188,19 @@ class _AlterarSenhaScreenState extends State<AlterarSenhaScreen> {
       );
       await user.reauthenticateWithCredential(cred);
       await user.updatePassword(nova);
+
+      // Se a biometria estava vinculada a esta conta com método email/senha,
+      // atualiza a senha cifrada no secure storage para o login biométrico
+      // continuar funcionando.
+      try {
+        final vinculo = await BiometriaService.instancia.lerVinculo();
+        if (vinculo != null &&
+            vinculo.uid == user.uid &&
+            vinculo.metodo == BiometriaMetodoLogin.emailSenha) {
+          await BiometriaService.instancia.atualizarSenhaVinculo(nova);
+        }
+      } catch (_) {}
+
       if (!mounted) return;
       await _mostrarSucessoEVoltar();
     } on FirebaseAuthException catch (e) {

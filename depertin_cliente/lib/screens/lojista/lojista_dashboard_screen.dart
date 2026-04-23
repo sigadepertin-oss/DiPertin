@@ -20,6 +20,11 @@ import 'lojista_config_screen.dart';
 
 const Color diPertinLaranja = Color(0xFFFF8F00);
 const Color diPertinRoxo = Color(0xFF6A1B9A);
+const Color _diPertinRoxoEscuro = Color(0xFF4A0B7C);
+const Color _fundoTela = Color(0xFFF7F5FA);
+const Color _tintaForte = Color(0xFF17162A);
+const Color _tintaMedia = Color(0xFF5A5870);
+const Color _bordaSuave = Color(0xFFECE8F2);
 
 class LojistaDashboardScreen extends StatefulWidget {
   const LojistaDashboardScreen({super.key});
@@ -184,66 +189,114 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: _fundoTela,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text(
           'Painel do Lojista',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.2,
+            fontSize: 17,
+          ),
         ),
-        backgroundColor: diPertinLaranja,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Colors.white),
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_diPertinRoxoEscuro, diPertinRoxo],
+            ),
+          ),
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.exit_to_app),
+            icon: const Icon(Icons.logout_rounded),
             tooltip: 'Sair da conta',
-            onPressed: () async {
-              final bool? confirmar = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  title: const Row(
-                    children: [
-                      Icon(Icons.logout, color: diPertinLaranja),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Sair da conta?',
-                          style: TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                    ],
-                  ),
-                  content: const Text(
-                    'Você precisará entrar de novo para acessar o painel do lojista.',
-                    style: TextStyle(height: 1.4),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancelar'),
-                    ),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: diPertinRoxo,
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Sair'),
-                    ),
-                  ],
-                ),
-              );
-              if (confirmar != true || !context.mounted) return;
-              await FirebaseAuth.instance.signOut();
-              if (context.mounted) Navigator.pop(context);
-            },
+            onPressed: _confirmarLogout,
           ),
         ],
       ),
       body: _corpoPainel(),
     );
+  }
+
+  Future<void> _confirmarLogout() async {
+    final bool? confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: diPertinRoxo.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.logout_rounded, color: diPertinRoxo),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Sair da conta?',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: _tintaForte,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Você precisará entrar novamente para acessar o painel.',
+          style: TextStyle(height: 1.5, color: _tintaMedia),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: diPertinRoxo,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Sair',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmar != true || !mounted) return;
+    await FirebaseAuth.instance.signOut();
+    if (mounted) Navigator.pop(context);
+  }
+
+  String _saudacaoPorHorario() {
+    final hora = DateTime.now().hour;
+    if (hora < 12) return 'Bom dia';
+    if (hora < 18) return 'Boa tarde';
+    return 'Boa noite';
+  }
+
+  String _dataExtensa() {
+    try {
+      return DateFormat("EEEE, d 'de' MMMM", 'pt_BR').format(DateTime.now());
+    } catch (_) {
+      return DateFormat("EEEE, d 'de' MMMM").format(DateTime.now());
+    }
   }
 
   Widget _corpoPainel() {
@@ -325,155 +378,358 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
         dados['loja_nome'] ?? dados['nome'] ?? 'Lojista';
     final bool lojaAberta = dados['loja_aberta'] != false;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Olá, $nomeParaExibir!',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Resumo de hoje',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-              _chipStatusLoja(lojaAberta),
-            ],
-          ),
-          const SizedBox(height: 16),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('pedidos')
-                .where('loja_id', isEqualTo: _uidLoja)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting &&
-                  !snapshot.hasData) {
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(
+          child: _heroHeader(nomeParaExibir, lojaAberta),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          sliver: SliverToBoxAdapter(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('pedidos')
+                  .where('loja_id', isEqualTo: _uidLoja)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                final carregando =
+                    snapshot.connectionState == ConnectionState.waiting &&
+                        !snapshot.hasData;
+
+                int novos = 0;
+                int andamento = 0;
+                if (!carregando) {
+                  final docs = snapshot.data?.docs ?? [];
+                  for (final doc in docs) {
+                    final m = doc.data() as Map<String, dynamic>;
+                    final s = m['status'] ?? 'pendente';
+                    if (s == 'pendente') {
+                      novos++;
+                    } else if (_statusAndamento.contains(s)) {
+                      andamento++;
+                    }
+                  }
+                }
+
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: diPertinLaranja,
-                            ),
-                          ),
-                        ),
-                      ),
+                    _linhaKpis(
+                      novos: carregando ? null : novos,
+                      andamento: carregando ? null : andamento,
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'O que você deseja gerenciar?',
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
+                    const SizedBox(height: 28),
+                    _tituloSecao('GESTÃO', 'O que você deseja gerenciar?'),
+                    const SizedBox(height: 16),
+                    ..._menusLojistaPorNivel(
+                      dados,
+                      badgeNovos: !carregando && novos > 0 ? novos : null,
                     ),
-                    const SizedBox(height: 20),
-                    ..._menusLojistaPorNivel(dados, badgeNovos: null),
+                    const SizedBox(height: 24),
+                    _bannerPainelWeb(),
+                    const SizedBox(height: 12),
                   ],
                 );
-              }
-
-              final docs = snapshot.data?.docs ?? [];
-              int novos = 0;
-              int andamento = 0;
-              for (final doc in docs) {
-                final m = doc.data() as Map<String, dynamic>;
-                final s = m['status'] ?? 'pendente';
-                if (s == 'pendente') {
-                  novos++;
-                } else if (_statusAndamento.contains(s)) {
-                  andamento++;
-                }
-              }
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _celulaResumo(
-                              valor: '$novos',
-                              legenda: 'Novos',
-                              icone: Icons.notifications_active_outlined,
-                              cor: Colors.blue.shade700,
-                            ),
-                          ),
-                          Container(
-                            width: 1,
-                            height: 44,
-                            color: Colors.grey.shade300,
-                          ),
-                          Expanded(
-                            child: _celulaResumo(
-                              valor: '$andamento',
-                              legenda: 'Em andamento',
-                              icone: Icons.soup_kitchen_outlined,
-                              cor: diPertinLaranja,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'O que você deseja gerenciar?',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 20),
-                  ..._menusLojistaPorNivel(
-                    dados,
-                    badgeNovos: novos > 0 ? novos : null,
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 30),
-          Container(
-            padding: const EdgeInsets.all(15),
-            decoration: BoxDecoration(
-              color: diPertinLaranja.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: diPertinLaranja.withValues(alpha: 0.3)),
+              },
             ),
-            child: const Row(
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _heroHeader(String nome, bool aberta) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_diPertinRoxoEscuro, diPertinRoxo, Color(0xFF8E24AA)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Decor radial sutil atrás do conteúdo
+          Positioned(
+            top: -30,
+            right: -40,
+            child: _decorRadial(160, Colors.white.withValues(alpha: 0.08)),
+          ),
+          Positioned(
+            bottom: -50,
+            left: -60,
+            child: _decorRadial(180, diPertinLaranja.withValues(alpha: 0.18)),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+              20,
+              26,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.desktop_windows, color: diPertinLaranja, size: 30),
-                SizedBox(width: 15),
-                Expanded(
-                  child: Text(
-                    'Lembrete: acesse o painel web para relatórios financeiros completos.',
-                    style: TextStyle(fontSize: 13, color: Colors.black87),
+                Text(
+                  _dataExtensa().toUpperCase(),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '${_saudacaoPorHorario()},',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  nome,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.6,
+                    height: 1.18,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _chipStatusLoja(aberta),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _decorRadial(double size, Color cor) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [cor, cor.withValues(alpha: 0)],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tituloSecao(String label, String titulo) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 22,
+              height: 2,
+              decoration: BoxDecoration(
+                color: diPertinLaranja,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.6,
+                color: diPertinLaranja.withValues(alpha: 0.9),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          titulo,
+          style: const TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: _tintaForte,
+            letterSpacing: -0.3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _linhaKpis({int? novos, int? andamento}) {
+    return Row(
+      children: [
+        Expanded(
+          child: _cardKpi(
+            valor: novos,
+            legenda: 'Novos',
+            icone: Icons.notifications_active_rounded,
+            cor: diPertinRoxo,
+            gradiente: const [Color(0xFFF5EEFC), Color(0xFFFAF5FE)],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _cardKpi(
+            valor: andamento,
+            legenda: 'Em andamento',
+            icone: Icons.local_shipping_rounded,
+            cor: diPertinLaranja,
+            gradiente: const [Color(0xFFFFF3E0), Color(0xFFFFF9F0)],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _cardKpi({
+    required int? valor,
+    required String legenda,
+    required IconData icone,
+    required Color cor,
+    required List<Color> gradiente,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: gradiente,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _bordaSuave, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: cor.withValues(alpha: 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: cor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icone, color: cor, size: 18),
+              ),
+              const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (valor == null)
+            SizedBox(
+              height: 30,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: cor,
+                  ),
+                ),
+              ),
+            )
+          else
+            Text(
+              '$valor',
+              style: TextStyle(
+                fontSize: 30,
+                fontWeight: FontWeight.w800,
+                color: cor,
+                height: 1,
+                letterSpacing: -1,
+              ),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            legenda,
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: _tintaMedia,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bannerPainelWeb() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _bordaSuave),
+        boxShadow: [
+          BoxShadow(
+            color: diPertinRoxo.withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  diPertinRoxo.withValues(alpha: 0.10),
+                  diPertinLaranja.withValues(alpha: 0.08),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.insights_rounded,
+              color: diPertinRoxo,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Relatórios financeiros',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: _tintaForte,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Acesse o painel web para relatórios completos.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: _tintaMedia,
+                    height: 1.4,
                   ),
                 ),
               ],
@@ -495,43 +751,43 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
       context,
       titulo: 'Gestão de pedidos',
       subtitulo: 'Aceite, recuse e acompanhe entregas',
-      icone: Icons.receipt_long,
-      cor: Colors.blue,
+      icone: Icons.receipt_long_rounded,
+      cor: const Color(0xFF2E6BE6),
       telaDestino: LojistaPedidosScreen(uidLoja: _uidLoja),
       badgeCount: badgeNovos,
     ));
 
     // Nível 2+: Produtos
     if (_nivel >= 2) {
-      itens.add(const SizedBox(height: 15));
+      itens.add(const SizedBox(height: 12));
       itens.add(_buildMenuCard(
         context,
         titulo: 'Meu estoque',
         subtitulo: 'Cadastre e edite seus produtos',
-        icone: Icons.inventory_2,
-        cor: Colors.green,
+        icone: Icons.inventory_2_rounded,
+        cor: const Color(0xFF0F9D8A),
         telaDestino: LojistaProdutosScreen(uidLoja: _uidLoja),
       ));
     }
 
     // Nível 3: Config + Avaliações
     if (_nivel >= 3) {
-      itens.add(const SizedBox(height: 15));
+      itens.add(const SizedBox(height: 12));
       itens.add(_buildMenuCard(
         context,
         titulo: 'Configurações da loja',
-        subtitulo: 'Horários de funcionamento, nome e status',
-        icone: Icons.store_mall_directory,
+        subtitulo: 'Horários, nome e status de funcionamento',
+        icone: Icons.storefront_rounded,
         cor: diPertinRoxo,
         telaDestino: LojistaConfigScreen(dadosAtuaisDaLoja: dados),
       ));
-      itens.add(const SizedBox(height: 15));
+      itens.add(const SizedBox(height: 12));
       itens.add(_buildMenuCard(
         context,
         titulo: 'Avaliações de clientes',
         subtitulo: 'Feedbacks e notas da sua loja',
-        icone: Icons.star,
-        cor: Colors.amber,
+        icone: Icons.star_rounded,
+        cor: const Color(0xFFE5A21B),
         telaDestino: LojistaAvaliacoesScreen(uidLoja: _uidLoja),
       ));
     }
@@ -718,68 +974,32 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
   }
 
   Widget _chipStatusLoja(bool aberta) {
-    return Material(
-      color: aberta ? Colors.green.shade50 : Colors.red.shade50,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              aberta ? Icons.storefront : Icons.store_mall_directory_outlined,
-              size: 18,
-              color: aberta ? Colors.green.shade800 : Colors.red.shade800,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              aberta ? 'Loja aberta' : 'Loja fechada',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                color: aberta ? Colors.green.shade800 : Colors.red.shade800,
-              ),
-            ),
-          ],
-        ),
+    final Color corBase = aberta
+        ? const Color(0xFF1BB76E)
+        : const Color(0xFFE05454);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
       ),
-    );
-  }
-
-  Widget _celulaResumo({
-    required String valor,
-    required String legenda,
-    required IconData icone,
-    required Color cor,
-  }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(icone, color: cor, size: 28),
-        const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              valor,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: cor,
-                height: 1.1,
-              ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _DotPulsante(cor: aberta ? const Color(0xFF2BE28F) : corBase),
+          const SizedBox(width: 8),
+          Text(
+            aberta ? 'Loja aberta' : 'Loja fechada',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              fontSize: 12.5,
+              letterSpacing: 0.2,
             ),
-            Text(
-              legenda,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade700,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -792,9 +1012,10 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
     required Widget telaDestino,
     int? badgeCount,
   }) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
           Navigator.push(
@@ -802,74 +1023,196 @@ class _LojistaDashboardScreenState extends State<LojistaDashboardScreen> {
             MaterialPageRoute(builder: (context) => telaDestino),
           );
         },
-        borderRadius: BorderRadius.circular(15),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: cor.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
+        splashColor: cor.withValues(alpha: 0.08),
+        highlightColor: cor.withValues(alpha: 0.04),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _bordaSuave),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF1A1530).withValues(alpha: 0.04),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+            child: Row(
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            cor.withValues(alpha: 0.18),
+                            cor.withValues(alpha: 0.08),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(icone, color: cor, size: 22),
                     ),
-                    child: Icon(icone, color: cor, size: 30),
-                  ),
-                  if (badgeCount != null && badgeCount > 0)
-                    Positioned(
-                      right: -4,
-                      top: -4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade700,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                        constraints: const BoxConstraints(minWidth: 20),
-                        child: Text(
-                          badgeCount > 99 ? '99+' : '$badgeCount',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
+                    if (badgeCount != null && badgeCount > 0)
+                      Positioned(
+                        right: -5,
+                        top: -5,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE53935),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFE53935)
+                                    .withValues(alpha: 0.35),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          constraints: const BoxConstraints(minWidth: 20),
+                          child: Text(
+                            badgeCount > 99 ? '99+' : '$badgeCount',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(width: 20),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      titulo,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                  ],
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        titulo,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w800,
+                          color: _tintaForte,
+                          letterSpacing: -0.3,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      subtitulo,
-                      style: const TextStyle(fontSize: 13, color: Colors.grey),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitulo,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          color: _tintaMedia,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: _fundoTela,
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    color: _tintaMedia,
+                    size: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bolinha com pulso animado (indicador de status "ao vivo").
+class _DotPulsante extends StatefulWidget {
+  final Color cor;
+  const _DotPulsante({required this.cor});
+
+  @override
+  State<_DotPulsante> createState() => _DotPulsanteState();
+}
+
+class _DotPulsanteState extends State<_DotPulsante>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 10,
+      height: 10,
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (_, __) {
+          final t = _ctrl.value;
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 10 + (t * 8),
+                height: 10 + (t * 8),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: widget.cor.withValues(alpha: (1 - t) * 0.35),
+                ),
+              ),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: widget.cor,
+                  boxShadow: [
+                    BoxShadow(
+                      color: widget.cor.withValues(alpha: 0.7),
+                      blurRadius: 5,
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
             ],
-          ),
-        ),
+          );
+        },
       ),
     );
   }

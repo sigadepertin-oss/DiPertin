@@ -1547,14 +1547,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
                                             ),
                                           ),
                                         ],
+                                        // Código de entrega só aparece quando o
+                                        // entregador já pegou o pedido e está
+                                        // a caminho do cliente (botão "Ir para
+                                        // o cliente" → status saiuEntrega).
+                                        // Antes aparecia desde aguardandoEntregador,
+                                        // expondo o código logo que a loja
+                                        // solicitava o entregador.
                                         if (statusAtual == PedidoStatus.aCaminho ||
                                             statusAtual == PedidoStatus.emRota ||
-                                            statusAtual ==
-                                                PedidoStatus
-                                                    .aguardandoEntregador ||
-                                            statusAtual ==
-                                                PedidoStatus
-                                                    .entregadorIndoLoja ||
                                             statusAtual ==
                                                 PedidoStatus.saiuEntrega) ...[
                                           const SizedBox(height: 14),

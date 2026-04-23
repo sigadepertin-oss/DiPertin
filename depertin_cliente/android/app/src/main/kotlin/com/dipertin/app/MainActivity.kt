@@ -5,19 +5,30 @@ import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+// NOTA (abr/2026): herdamos de FlutterFragmentActivity (e não FlutterActivity)
+// porque o plugin `local_auth_android` usa `BiometricPrompt`, que é um Fragment
+// e requer um host FragmentActivity. FlutterFragmentActivity é compatível com
+// todos os plugins FCM/receivers/MethodChannels já integrados neste projeto.
+class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         const val EXTRA_ABRIR_ENTREGADOR = "dipertin_open_entregador"
@@ -226,6 +237,33 @@ class MainActivity : FlutterActivity() {
                             "sdk" to Build.VERSION.SDK_INT,
                         ),
                     )
+                }
+
+                // ── Vibração em padrão ─────────────────────────────
+                "vibratePattern" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val durations = (args?.get("durations") as? List<*>)
+                        ?.mapNotNull { (it as? Number)?.toLong() }
+                        ?: listOf(0L, 700L, 400L, 700L, 400L, 700L, 400L, 700L)
+                    val repeat = (args?.get("repeat") as? Number)?.toInt() ?: -1
+                    result.success(VibrationHelper.vibratePattern(this, durations, repeat))
+                }
+                "cancelVibrate" -> {
+                    VibrationHelper.cancel(this)
+                    result.success(true)
+                }
+
+                // ── Flash da câmera (LED) ──────────────────────────
+                "torchBlink" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val onMs = (args?.get("onMs") as? Number)?.toLong() ?: 250L
+                    val offMs = (args?.get("offMs") as? Number)?.toLong() ?: 250L
+                    val times = (args?.get("times") as? Number)?.toInt() ?: 8
+                    result.success(TorchHelper.blink(this, onMs, offMs, times))
+                }
+                "torchOff" -> {
+                    TorchHelper.stop(this)
+                    result.success(true)
                 }
 
                 // ── Tela de detalhes do app no sistema ─────────────
@@ -480,5 +518,122 @@ object OemPermissions {
 
         return tryAction(ctx, Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.parse("package:${ctx.packageName}"))
+    }
+}
+
+/**
+ * Helper para vibração em padrão real (estilo chamada recebida), funciona
+ * também quando o celular está bloqueado. Requer permissão VIBRATE no
+ * manifest. Em dispositivos que suportam VibrationEffect (API 26+), usa
+ * waveform; fallback para o API legado em dispositivos antigos.
+ */
+object VibrationHelper {
+    private fun obterVibrator(ctx: Context): Vibrator? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val manager = ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                    as? VibratorManager
+                manager?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun vibratePattern(ctx: Context, durations: List<Long>, repeat: Int): Boolean {
+        if (durations.isEmpty()) return false
+        val v = obterVibrator(ctx) ?: return false
+        if (!v.hasVibrator()) return false
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val effect = VibrationEffect.createWaveform(
+                    durations.toLongArray(),
+                    repeat,
+                )
+                v.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(durations.toLongArray(), repeat)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun cancel(ctx: Context) {
+        try { obterVibrator(ctx)?.cancel() } catch (_: Exception) {}
+    }
+}
+
+/**
+ * Helper para piscar o LED da câmera (lanterna). Usa `setTorchMode` do
+ * `CameraManager` (API 23+), que funciona mesmo com o celular bloqueado e
+ * sem precisar abrir a câmera. Reentrante: se for chamado de novo enquanto
+ * pisca, cancela o loop anterior antes de iniciar.
+ */
+object TorchHelper {
+    @Volatile private var piscando = false
+    private var handler: Handler? = null
+    private var cameraManager: CameraManager? = null
+    private var cameraId: String? = null
+
+    private fun resolver(ctx: Context): Pair<CameraManager, String>? {
+        val cm = ctx.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            ?: return null
+        val id = try {
+            cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        return cm to id
+    }
+
+    fun blink(ctx: Context, onMs: Long, offMs: Long, times: Int): Boolean {
+        stop(ctx)
+        val (cm, id) = resolver(ctx) ?: return false
+        cameraManager = cm
+        cameraId = id
+        val h = Handler(Looper.getMainLooper())
+        handler = h
+        piscando = true
+
+        var restante = times
+        val pulseRunnable = object : Runnable {
+            override fun run() {
+                if (!piscando) return
+                if (restante <= 0) {
+                    try { cm.setTorchMode(id, false) } catch (_: Exception) {}
+                    piscando = false
+                    return
+                }
+                restante--
+                try { cm.setTorchMode(id, true) } catch (_: Exception) {}
+                h.postDelayed({
+                    if (!piscando) return@postDelayed
+                    try { cm.setTorchMode(id, false) } catch (_: Exception) {}
+                    h.postDelayed(this, offMs)
+                }, onMs)
+            }
+        }
+        h.post(pulseRunnable)
+        return true
+    }
+
+    fun stop(ctx: Context) {
+        piscando = false
+        handler?.removeCallbacksAndMessages(null)
+        handler = null
+        try {
+            val cm = cameraManager ?: ctx.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            val id = cameraId ?: return
+            cm?.setTorchMode(id, false)
+        } catch (_: Exception) {}
     }
 }

@@ -701,6 +701,12 @@ const entregadorStatusNotificacao = require("./entregador_status_notificacao");
 exports.onEntregadorStatusCadastroAtualizado =
     entregadorStatusNotificacao.onEntregadorStatusCadastroAtualizado;
 
+// Ao aprovar o cadastro do entregador, promove a selfie de verificação
+// (url_selfie_entregador) a foto de perfil permanente e trava a troca.
+const entregadorSelfieAprovacao = require("./entregador_selfie_aprovacao");
+exports.onEntregadorAprovadoPromoverSelfie =
+    entregadorSelfieAprovacao.onEntregadorAprovadoPromoverSelfie;
+
 // Fase 3 (Configurações do entregador) — mantém campos planos em `users`
 // sincronizados com a subcoleção `veiculos/{vid}` para compat do painel.
 const veiculosEntregador = require("./veiculos_entregador");

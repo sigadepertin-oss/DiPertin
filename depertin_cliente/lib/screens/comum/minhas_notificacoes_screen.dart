@@ -10,6 +10,7 @@ import '../../services/fcm_rota.dart';
 import '../../services/notificacoes_historico_service.dart';
 import '../lojista/lojista_form_screen.dart';
 import '../entregador/entregador_form_screen.dart';
+import '../entregador/entregador_home_screen.dart';
 import '../entregador/entregador_carteira_screen.dart';
 import '../cliente/chat_suporte_screen.dart';
 
@@ -209,11 +210,19 @@ class _MinhasNotificacoesScreenState extends State<MinhasNotificacoesScreen> {
       return;
     }
 
-    // 2) Cadastro de entregador (aprovado/recusado) → tela "Ser entregador".
-    if (tipo.contains('entregador_cadastro') ||
-        (tipo.contains('cadastro') && widget.role == 'entregador')) {
+    // 2) Cadastro de entregador.
+    //    - APROVADO → radar/home do entregador (começar a receber ofertas).
+    //    - RECUSADO/demais → formulário "Ser entregador" (revisar cadastro).
+    final ehCadastroEntregador = tipo.contains('entregador_cadastro') ||
+        (tipo.contains('cadastro') && widget.role == 'entregador');
+    if (ehCadastroEntregador) {
+      final ehAprovado = tipo.contains('aprovad');
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const EntregadorFormScreen()),
+        MaterialPageRoute(
+          builder: (_) => ehAprovado
+              ? const EntregadorHomeScreen()
+              : const EntregadorFormScreen(),
+        ),
       );
       return;
     }

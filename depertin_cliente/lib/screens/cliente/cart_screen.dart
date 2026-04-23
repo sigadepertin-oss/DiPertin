@@ -57,6 +57,10 @@ class _CartScreenState extends State<CartScreen> {
   String _ultimaLojaIdTaxa = '';
   /// Por loja (entrega) — usado no split multi-loja.
   Map<String, double> _taxaEntregaPorLoja = {};
+
+  /// Memória detalhada da regra aplicada por loja (para mostrar a
+  /// composição do frete no card Subtotal — auditoria visual).
+  Map<String, _DetalheFreteLoja> _detalhesFretePorLoja = {};
   int _qtdPedidosUltimoCheckout = 1;
 
   double get _taxaEntregaReal => _retirarNaLoja ? 0.0 : _taxaEntregaCalculada;
@@ -309,13 +313,28 @@ class _CartScreenState extends State<CartScreen> {
     });
   }
 
-  Future<Map<String, dynamic>?> _carregarRegraFrete(String cidadeLoja) async {
+  /// Carrega a regra de frete respeitando o veículo alvo (`padrao` ou `carro`).
+  ///
+  /// Regra do projeto: o frete padrão é SEMPRE moto/bike. A tabela de carro
+  /// só é acionada quando a loja marca `requer_veiculo_grande` em algum item
+  /// do carrinho (carga maior / volumoso).
+  ///
+  /// Fallbacks:
+  /// - Se `veiculoAlvo == 'carro'` e não existir regra do carro para a cidade,
+  ///   caímos para a regra `padrao` (e deixamos isso explícito no detalhe).
+  /// - Se `veiculoAlvo == 'padrao'` e só existir `carro`, NÃO usamos carro
+  ///   (retorna `null` para cair no fallback fixo de [_taxaBaseFallback]).
+  Future<({Map<String, dynamic> regra, String veiculoEfetivo})?>
+  _carregarRegraFrete(
+    String cidadeLoja, {
+    required String veiculoAlvo,
+  }) async {
     final cidadeOriginal = cidadeLoja.trim().toLowerCase();
     final cidadeNormalizada = _normalizarCidadeFrete(cidadeLoja);
     final ref = FirebaseFirestore.instance.collection('tabela_fretes');
     final porId = <String, Map<String, dynamic>>{};
 
-    Future<DocumentSnapshot<Map<String, dynamic>>> _getDoc(String id) async {
+    Future<DocumentSnapshot<Map<String, dynamic>>> getDoc(String id) async {
       try {
         return await ref.doc(id).get(const GetOptions(source: Source.server));
       } catch (_) {
@@ -323,7 +342,7 @@ class _CartScreenState extends State<CartScreen> {
       }
     }
 
-    Future<QuerySnapshot<Map<String, dynamic>>> _getCidade(String cidade) async {
+    Future<QuerySnapshot<Map<String, dynamic>>> getCidade(String cidade) async {
       try {
         return await ref
             .where('cidade', isEqualTo: cidade)
@@ -341,14 +360,14 @@ class _CartScreenState extends State<CartScreen> {
       'todas_padrao',
       'todas_carro',
     }) {
-      final d = await _getDoc(id);
+      final d = await getDoc(id);
       if (d.exists) {
         porId[id] = d.data() ?? <String, dynamic>{};
       }
     }
 
     for (final cidade in <String>{cidadeOriginal, cidadeNormalizada, 'todas'}) {
-      final q = await _getCidade(cidade);
+      final q = await getCidade(cidade);
       for (final doc in q.docs) {
         porId[doc.id] = doc.data();
       }
@@ -356,25 +375,68 @@ class _CartScreenState extends State<CartScreen> {
 
     if (porId.isEmpty) return null;
 
-    final regras = porId.entries.toList();
-    regras.sort((a, b) {
-      final ta =
-          (a.value['data_atualizacao'] as Timestamp?)?.millisecondsSinceEpoch ??
+    String veiculoDaRegra(String id, Map<String, dynamic> dados) {
+      final campo = (dados['veiculo'] ?? '').toString().toLowerCase();
+      if (campo.contains('carro')) return 'carro';
+      if (campo.contains('moto') || campo.contains('bike') ||
+          campo.contains('padr')) {
+        return 'padrao';
+      }
+      return id.endsWith('_carro') ? 'carro' : 'padrao';
+    }
+
+    int cmpAtualizacao(
+      MapEntry<String, Map<String, dynamic>> a,
+      MapEntry<String, Map<String, dynamic>> b,
+    ) {
+      final ta = (a.value['data_atualizacao'] as Timestamp?)
+              ?.millisecondsSinceEpoch ??
           0;
-      final tb =
-          (b.value['data_atualizacao'] as Timestamp?)?.millisecondsSinceEpoch ??
+      final tb = (b.value['data_atualizacao'] as Timestamp?)
+              ?.millisecondsSinceEpoch ??
           0;
       return tb.compareTo(ta);
-    });
+    }
 
-    return regras.first.value;
+    final candidatasAlvo = porId.entries
+        .where((e) => veiculoDaRegra(e.key, e.value) == veiculoAlvo)
+        .toList()
+      ..sort(cmpAtualizacao);
+    if (candidatasAlvo.isNotEmpty) {
+      return (
+        regra: candidatasAlvo.first.value,
+        veiculoEfetivo: veiculoAlvo,
+      );
+    }
+
+    // Fallback: se pedi 'carro' e não há regra específica, uso 'padrao'.
+    if (veiculoAlvo == 'carro') {
+      final candidatasPadrao = porId.entries
+          .where((e) => veiculoDaRegra(e.key, e.value) == 'padrao')
+          .toList()
+        ..sort(cmpAtualizacao);
+      if (candidatasPadrao.isNotEmpty) {
+        return (
+          regra: candidatasPadrao.first.value,
+          veiculoEfetivo: 'padrao',
+        );
+      }
+    }
+
+    // Se pedi 'padrao' e só há carro, NÃO uso (frete padrão é sagrado).
+    return null;
   }
 
   /// Frete de uma loja até o endereço de entrega (mesma regra que o fluxo single-loja).
-  Future<({double taxa, String? detalheKm})> _resolverTaxaEntregaParaLoja({
+  ///
+  /// [veiculoAlvo] deve ser `'padrao'` (moto/bike) ou `'carro'`. O carrinho
+  /// escolhe `'carro'` apenas quando algum item do grupo da loja está marcado
+  /// como `requer_veiculo_grande` no painel do lojista.
+  Future<_DetalheFreteLoja> _resolverTaxaEntregaParaLoja({
     required String clienteId,
     required String lojaId,
     required String enderecoTexto,
+    required String veiculoAlvo,
   }) async {
     // Fase 3G.2 — carrinho lê dados da loja em `lojas_public` (cidade + coords
     // para calcular frete). Dados sensíveis do lojista ficam em `users`.
@@ -387,14 +449,31 @@ class _CartScreenState extends State<CartScreen> {
     final lojaLat = _coordToDouble(ld['latitude']);
     final lojaLng = _coordToDouble(ld['longitude']);
     if (cidadeLoja.isEmpty || lojaLat == null || lojaLng == null) {
-      return (taxa: _taxaBaseFallback, detalheKm: null);
+      return _DetalheFreteLoja.fallback(
+        lojaId: lojaId,
+        taxa: _taxaBaseFallback,
+        motivo: 'Loja sem cidade/coordenadas cadastradas',
+        veiculoAlvo: veiculoAlvo,
+      );
     }
 
-    final regra = await _carregarRegraFrete(cidadeLoja);
-    if (regra == null) {
-      return (taxa: _taxaBaseFallback, detalheKm: null);
+    final resultado = await _carregarRegraFrete(
+      cidadeLoja,
+      veiculoAlvo: veiculoAlvo,
+    );
+    if (resultado == null) {
+      return _DetalheFreteLoja.fallback(
+        lojaId: lojaId,
+        taxa: _taxaBaseFallback,
+        motivo: veiculoAlvo == 'carro'
+            ? 'Sem tabela de frete (carro/padrão) para $cidadeLoja'
+            : 'Sem tabela de frete (padrão) para $cidadeLoja',
+        cidade: cidadeLoja,
+        veiculoAlvo: veiculoAlvo,
+      );
     }
 
+    final regra = resultado.regra;
     final base =
         _coordToDouble(regra['valor_base']) ??
         _coordToDouble(regra['valor_fixo_base']) ??
@@ -415,16 +494,38 @@ class _CartScreenState extends State<CartScreen> {
     final entLat = coordsEntrega.lat;
     final entLng = coordsEntrega.lng;
     if (entLat == null || entLng == null) {
-      return (taxa: base, detalheKm: null);
+      return _DetalheFreteLoja(
+        lojaId: lojaId,
+        cidade: cidadeLoja,
+        veiculoAlvo: veiculoAlvo,
+        veiculoEfetivo: resultado.veiculoEfetivo,
+        base: base,
+        distanciaBaseKm: distBase,
+        valorKmAdicional: extraKm,
+        distanciaKm: null,
+        kmExtra: 0,
+        taxa: double.parse(base.toStringAsFixed(2)),
+        fallback: false,
+        motivo: 'Endereço de entrega sem coordenadas (usando só valor base)',
+      );
     }
 
     final distanciaKm =
         Geolocator.distanceBetween(lojaLat, lojaLng, entLat, entLng) / 1000;
     final kmExtra = max(0.0, distanciaKm - distBase);
     final taxa = base + (kmExtra * extraKm);
-    return (
+    return _DetalheFreteLoja(
+      lojaId: lojaId,
+      cidade: cidadeLoja,
+      veiculoAlvo: veiculoAlvo,
+      veiculoEfetivo: resultado.veiculoEfetivo,
+      base: base,
+      distanciaBaseKm: distBase,
+      valorKmAdicional: extraKm,
+      distanciaKm: distanciaKm,
+      kmExtra: kmExtra,
       taxa: double.parse(taxa.toStringAsFixed(2)),
-      detalheKm: '${distanciaKm.toStringAsFixed(1)} km da loja',
+      fallback: false,
     );
   }
 
@@ -438,6 +539,7 @@ class _CartScreenState extends State<CartScreen> {
         setState(() {
           _taxaEntregaCalculada = 0;
           _taxaEntregaPorLoja = {for (final id in grupos.keys) id: 0.0};
+          _detalhesFretePorLoja = {};
           _detalheTaxaEntrega = 'Retirada na loja';
           _calculandoTaxaEntrega = false;
         });
@@ -455,29 +557,57 @@ class _CartScreenState extends State<CartScreen> {
     if (mounted) setState(() => _calculandoTaxaEntrega = true);
 
     final taxas = <String, double>{};
+    final detalhes = <String, _DetalheFreteLoja>{};
     var soma = 0.0;
-    String? primeiroDetalheKm;
+    _DetalheFreteLoja? primeiroDetalhe;
     var qtdFalhas = 0;
 
     // Multi-loja: cada loja é resolvida ISOLADAMENTE. Se UMA falhar
     // (timeout, geocoding, etc.), aplicamos fallback _taxaBaseFallback
-    // SÓ pra essa loja e continuamos calculando as demais. Antes, qualquer
-    // exceção zerava o mapa inteiro (`_taxaEntregaPorLoja = {}`), o que
-    // cascateava em frete=0 para todas no batch.
+    // SÓ pra essa loja e continuamos calculando as demais.
     for (final lojaId in lojaIds) {
+      final itens = grupos[lojaId] ?? const <CartItemModel>[];
+      // Blindagem contra itens carregados do SharedPreferences antes de
+      // o campo `requerVeiculoGrande` existir (ou contra hot-reload que
+      // deixa instâncias antigas sem o slot) — tratamos qualquer erro de
+      // acesso como "não volumoso".
+      bool precisaCarro = false;
+      for (final item in itens) {
+        try {
+          if (item.requerVeiculoGrande == true) {
+            precisaCarro = true;
+            break;
+          }
+        } catch (_) {
+          // ignore — instância antiga sem o campo, trata como padrão
+        }
+      }
+      final veiculoAlvo = precisaCarro ? 'carro' : 'padrao';
+
       try {
-        final r = await _resolverTaxaEntregaParaLoja(
+        final det = await _resolverTaxaEntregaParaLoja(
           clienteId: user.uid,
           lojaId: lojaId,
           enderecoTexto: endereco,
+          veiculoAlvo: veiculoAlvo,
         );
-        taxas[lojaId] = r.taxa;
-        soma += r.taxa;
-        primeiroDetalheKm ??= r.detalheKm;
+        taxas[lojaId] = det.taxa;
+        detalhes[lojaId] = det;
+        soma += det.taxa;
+        primeiroDetalhe ??= det;
+        if (det.fallback) qtdFalhas++;
       } catch (e) {
         qtdFalhas++;
         taxas[lojaId] = _taxaBaseFallback;
+        final fallbackDet = _DetalheFreteLoja.fallback(
+          lojaId: lojaId,
+          taxa: _taxaBaseFallback,
+          motivo: 'Erro ao calcular frete — usando valor padrão',
+          veiculoAlvo: veiculoAlvo,
+        );
+        detalhes[lojaId] = fallbackDet;
         soma += _taxaBaseFallback;
+        primeiroDetalhe ??= fallbackDet;
         debugPrint(
           'Erro ao calcular taxa para loja $lojaId (usando fallback R\$ $_taxaBaseFallback): $e',
         );
@@ -487,17 +617,15 @@ class _CartScreenState extends State<CartScreen> {
     if (!mounted) return;
     setState(() {
       _taxaEntregaPorLoja = taxas;
+      _detalhesFretePorLoja = detalhes;
       _taxaEntregaCalculada = _round2(soma);
       if (lojaIds.length > 1) {
-        final sufixo = qtdFalhas > 0
-            ? ' (frete padrão em $qtdFalhas)'
-            : '';
+        final sufixo = qtdFalhas > 0 ? ' (frete padrão em $qtdFalhas)' : '';
         _detalheTaxaEntrega =
             '${lojaIds.length} lojas — total frete R\$ ${_taxaEntregaCalculada.toStringAsFixed(2)}$sufixo';
       } else {
-        _detalheTaxaEntrega = qtdFalhas > 0
-            ? 'Frete padrão (erro ao calcular)'
-            : (primeiroDetalheKm ?? 'Frete calculado');
+        _detalheTaxaEntrega = primeiroDetalhe?.resumoCurto() ??
+            (qtdFalhas > 0 ? 'Frete padrão (erro ao calcular)' : 'Frete calculado');
       }
       _calculandoTaxaEntrega = false;
     });
@@ -1637,6 +1765,154 @@ class _CartScreenState extends State<CartScreen> {
   /// Espaço extra entre o card do total e a faixa laranja ao rolar até o fim.
   static const double _folgaEntreConteudoEBarra = 36;
 
+  /// Bloco de detalhamento do frete exibido abaixo do valor "Taxa de Entrega"
+  /// no card Subtotal. Mostra:
+  /// - calculando... enquanto roda;
+  /// - resumo da regra aplicada (cidade · veículo · base + km extras);
+  /// - alerta amigável quando o endereço ainda não foi informado;
+  /// - no multi-loja, o valor e a regra de cada loja.
+  Widget _blocoDetalheFrete() {
+    final textoEnderecoVazio = _enderecoController.text.trim().isEmpty;
+    final detalhes = _detalhesFretePorLoja;
+    final veiculoGrande = detalhes.values.any(
+      (d) => d.veiculoEfetivo == 'carro',
+    );
+    final corBorda = veiculoGrande
+        ? diPertinLaranja.withValues(alpha: 0.35)
+        : Colors.grey.shade200;
+    final corFundo = veiculoGrande
+        ? diPertinLaranja.withValues(alpha: 0.06)
+        : const Color(0xFFF8F7FC);
+
+    Widget icone() {
+      if (_calculandoTaxaEntrega) {
+        return const SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+      }
+      return Icon(
+        veiculoGrande ? Icons.local_shipping_rounded : Icons.two_wheeler_rounded,
+        size: 16,
+        color: veiculoGrande ? diPertinLaranja : Colors.grey[600],
+      );
+    }
+
+    Widget conteudo;
+    if (_calculandoTaxaEntrega) {
+      conteudo = const Text(
+        'Calculando frete pela tabela...',
+        style: TextStyle(fontSize: 12, color: Colors.grey),
+      );
+    } else if (textoEnderecoVazio) {
+      conteudo = Text(
+        'Informe o endereço de entrega para calcular o frete pela tabela.',
+        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+      );
+    } else if (detalhes.isEmpty) {
+      conteudo = Text(
+        _detalheTaxaEntrega.isEmpty
+            ? 'Valor tabelado de acordo com a distância entre a loja e o cliente.'
+            : _detalheTaxaEntrega,
+        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+      );
+    } else if (detalhes.length == 1) {
+      final d = detalhes.values.first;
+      conteudo = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            d.resumoCurto(),
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[700],
+              height: 1.35,
+            ),
+          ),
+          if (d.veiculoAlvo == 'carro' && d.veiculoEfetivo == 'padrao') ...[
+            const SizedBox(height: 4),
+            Text(
+              'A loja não tem tabela de carro cadastrada para a cidade — '
+              'estamos aplicando a tabela padrão.',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.orange[800],
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ],
+      );
+    } else {
+      conteudo = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '${detalhes.length} lojas — composição do frete:',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final d in detalhes.values)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '• ',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      d.resumoCurto(),
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: Colors.grey[700],
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: corFundo,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: corBorda),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: icone(),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: conteudo),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<CartProvider>();
@@ -2511,7 +2787,7 @@ class _CartScreenState extends State<CartScreen> {
                               isDense: true,
                               alignLabelWithHint: true,
                               hintText:
-                                  'Ex.: Rua das Flores, 120, Centro, Toledo — apto 302',
+                                  'Ex.: Rua das Flores, 120, Centro, Rondonópolis - MT — apto 302',
                               hintStyle: TextStyle(
                                 fontSize: 14,
                                 color: Colors.grey[400],
@@ -2802,42 +3078,7 @@ class _CartScreenState extends State<CartScreen> {
                             ),
                           ],
                         ),
-                        if (!_retirarNaLoja)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Row(
-                              children: [
-                                if (_calculandoTaxaEntrega)
-                                  const SizedBox(
-                                    width: 12,
-                                    height: 12,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                else
-                                  Icon(
-                                    Icons.route_outlined,
-                                    size: 14,
-                                    color: Colors.grey[500],
-                                  ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    _calculandoTaxaEntrega
-                                        ? 'Calculando frete pela tabela...'
-                                        : (_detalheTaxaEntrega.isEmpty
-                                              ? 'Frete pela tabela de fretes'
-                                              : _detalheTaxaEntrega),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                        if (!_retirarNaLoja) _blocoDetalheFrete(),
                         if (_cupomAplicado && _descontoCupom > 0) ...[
                           const SizedBox(height: 10),
                           Row(
@@ -3009,4 +3250,105 @@ class _CartScreenState extends State<CartScreen> {
             ),
     );
   }
+}
+
+/// Snapshot imutável da regra de frete aplicada a UMA loja, usado para:
+/// 1. calcular e persistir o valor final por loja;
+/// 2. exibir a composição no card Subtotal (auditoria visual pro cliente).
+class _DetalheFreteLoja {
+  final String lojaId;
+  final String? cidade;
+
+  /// Veículo que o carrinho PEDIU (`padrao` ou `carro`).
+  final String veiculoAlvo;
+
+  /// Veículo que a tabela realmente respondeu. Pode divergir de [veiculoAlvo]
+  /// quando `carro` foi solicitado mas só existia `padrao` cadastrado.
+  final String veiculoEfetivo;
+
+  final double base;
+  final double distanciaBaseKm;
+  final double valorKmAdicional;
+
+  /// Distância em km entre loja e endereço de entrega (linha reta). Pode ser
+  /// `null` quando não conseguimos geocodificar o endereço — nesse caso só
+  /// aplicamos o valor base.
+  final double? distanciaKm;
+
+  final double kmExtra;
+  final double taxa;
+
+  /// Marcado quando não houve regra aplicável (usamos _taxaBaseFallback).
+  final bool fallback;
+
+  /// Mensagem curta explicando por que caímos em fallback ou regra incompleta.
+  final String? motivo;
+
+  const _DetalheFreteLoja({
+    required this.lojaId,
+    required this.cidade,
+    required this.veiculoAlvo,
+    required this.veiculoEfetivo,
+    required this.base,
+    required this.distanciaBaseKm,
+    required this.valorKmAdicional,
+    required this.distanciaKm,
+    required this.kmExtra,
+    required this.taxa,
+    required this.fallback,
+    this.motivo,
+  });
+
+  factory _DetalheFreteLoja.fallback({
+    required String lojaId,
+    required double taxa,
+    required String motivo,
+    required String veiculoAlvo,
+    String? cidade,
+  }) =>
+      _DetalheFreteLoja(
+        lojaId: lojaId,
+        cidade: cidade,
+        veiculoAlvo: veiculoAlvo,
+        veiculoEfetivo: veiculoAlvo,
+        base: taxa,
+        distanciaBaseKm: 0,
+        valorKmAdicional: 0,
+        distanciaKm: null,
+        kmExtra: 0,
+        taxa: double.parse(taxa.toStringAsFixed(2)),
+        fallback: true,
+        motivo: motivo,
+      );
+
+  String get rotuloVeiculo =>
+      veiculoEfetivo == 'carro' ? 'Carro (carga maior)' : 'Moto/Bike';
+
+  /// Linha curta exibida abaixo da taxa no card Subtotal (single-loja).
+  /// Ex.: "Toledo · Moto/Bike · R$ 1,00 base + R$ 2,25 × 1,2 km = R$ 3,70"
+  String resumoCurto() {
+    if (fallback) {
+      return motivo ?? 'Frete padrão aplicado';
+    }
+    final cidadeTxt = (cidade ?? '').trim();
+    final cidadeFmt = cidadeTxt.isEmpty
+        ? ''
+        : '${cidadeTxt[0].toUpperCase()}${cidadeTxt.substring(1)} · ';
+    final partes = <String>[
+      'R\$ ${base.toStringAsFixed(2)} base',
+      'até ${_fmtKm(distanciaBaseKm)}',
+    ];
+    if (valorKmAdicional > 0 && kmExtra > 0) {
+      partes.add(
+        '+ R\$ ${valorKmAdicional.toStringAsFixed(2)}/km × ${_fmtKm(kmExtra)}',
+      );
+    }
+    final distanciaTxt = distanciaKm == null
+        ? ''
+        : ' (distância ${_fmtKm(distanciaKm!)})';
+    return '$cidadeFmt$rotuloVeiculo · ${partes.join(' ')} = '
+        'R\$ ${taxa.toStringAsFixed(2)}$distanciaTxt';
+  }
+
+  static String _fmtKm(double v) => '${v.toStringAsFixed(1)} km';
 }

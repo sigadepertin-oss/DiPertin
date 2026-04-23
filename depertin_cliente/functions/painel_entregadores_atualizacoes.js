@@ -1,16 +1,26 @@
 /**
  * Painel web — aba "Atualizações" (Gestão de Entregadores).
- * Lista CNH/CRLV com status pendente para entregadores já aprovados.
- * Usa Admin SDK para evitar PERMISSION_DENIED em collectionGroup no cliente.
+ *
+ * Lista CNH/CRLV com status pendente para entregadores JÁ APROVADOS que
+ * enviaram uma nova versão pelo app (troca de veículo, renovação de CNH/CRLV).
+ *
+ * Abordagem (sem collection group, sem índices frágeis):
+ *   1. Busca `users` com role=entregador e entregador_status=aprovado
+ *      (índice composto já existente).
+ *   2. Para cada entregador aprovado, em paralelo:
+ *        - lê users/{uid}/documentos/cnh
+ *        - lista users/{uid}/veiculos e, para cada, veiculos/{vid}/documentos/crlv
+ *   3. Filtra apenas docs com status == "pendente" e devolve.
+ *
+ * Essa implementação evita FAILED_PRECONDITION por índice de collection group
+ * ausente (raiz do erro "INTERNAL" na aba Atualizações do painel).
  */
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 
-/** Garante JSON puro no retorno do onCall (evita falha de serialização p.ex. com Timestamps aninhados). */
+/** Serialização defensiva para Timestamps/GeoPoints/DocumentReferences aninhados. */
 function dadoParaJson(val) {
-    if (val == null) {
-        return val;
-    }
+    if (val == null) return val;
     if (val instanceof admin.firestore.Timestamp) {
         return val.toDate().toISOString();
     }
@@ -64,40 +74,87 @@ function isStaffUser(d) {
     );
 }
 
-function parseDocumentoPath(fullPath) {
-    const parts = String(fullPath || "").split("/");
-    // users/{uid}/documentos/cnh
-    if (
-        parts.length === 4 &&
-        parts[0] === "users" &&
-        parts[2] === "documentos" &&
-        parts[3] === "cnh"
-    ) {
-        return { uid: parts[1], tipoDoc: "cnh", veiculoId: null };
+function isPendente(status) {
+    return String(status || "").trim().toLowerCase() === "pendente";
+}
+
+/** Executa promessas em lotes para não estourar limite de conexões do Firestore. */
+async function emLotes(itens, tamanhoLote, fn) {
+    const resultados = [];
+    for (let i = 0; i < itens.length; i += tamanhoLote) {
+        const fatia = itens.slice(i, i + tamanhoLote);
+        const r = await Promise.all(fatia.map(fn));
+        resultados.push(...r);
     }
-    // users/{uid}/veiculos/{vid}/documentos/crlv
-    if (
-        parts.length === 6 &&
-        parts[0] === "users" &&
-        parts[2] === "veiculos" &&
-        parts[4] === "documentos" &&
-        parts[5] === "crlv"
-    ) {
-        return {
-            uid: parts[1],
-            tipoDoc: "crlv",
-            veiculoId: parts[3],
-        };
+    return resultados;
+}
+
+async function coletarPendentesDoEntregador(db, uid, userData) {
+    const itens = [];
+    const cidade = String(userData?.cidade || "").trim();
+
+    const cnhRef = db
+        .collection("users")
+        .doc(uid)
+        .collection("documentos")
+        .doc("cnh");
+    const veiculosRef = db
+        .collection("users")
+        .doc(uid)
+        .collection("veiculos");
+
+    const [cnhSnap, veiculosSnap] = await Promise.all([
+        cnhRef.get().catch(() => null),
+        veiculosRef.get().catch(() => null),
+    ]);
+
+    if (cnhSnap && cnhSnap.exists) {
+        const d = cnhSnap.data() || {};
+        if (isPendente(d.status)) {
+            itens.push({
+                documentPath: cnhSnap.ref.path,
+                uid,
+                tipoDoc: "cnh",
+                veiculoId: null,
+                cidade,
+                data: dadoParaJson(d),
+            });
+        }
     }
-    return null;
+
+    if (veiculosSnap && !veiculosSnap.empty) {
+        const veiculoIds = veiculosSnap.docs.map((x) => x.id);
+        const crlvs = await emLotes(veiculoIds, 10, async (vid) => {
+            const crlvRef = veiculosRef
+                .doc(vid)
+                .collection("documentos")
+                .doc("crlv");
+            const s = await crlvRef.get().catch(() => null);
+            if (!s || !s.exists) return null;
+            const d = s.data() || {};
+            if (!isPendente(d.status)) return null;
+            return {
+                documentPath: s.ref.path,
+                uid,
+                tipoDoc: "crlv",
+                veiculoId: vid,
+                cidade,
+                data: dadoParaJson(d),
+            };
+        });
+        for (const x of crlvs) {
+            if (x) itens.push(x);
+        }
+    }
+
+    return itens;
 }
 
 exports.painelEntregadoresAtualizacoesPendentes = functions
     .runWith({
         timeoutSeconds: 120,
         memory: "512MB",
-        // Painel web não usa reCAPTCHA/App Check; HTTP direto do Flutter não manda
-        // X-Firebase-AppCheck. Explícito para o runtime não exigir token.
+        // Painel web chama via HTTP direto (sem App Check).
         enforceAppCheck: false,
     })
     .https.onCall(async (data, context) => {
@@ -126,6 +183,7 @@ exports.painelEntregadoresAtualizacoesPendentes = functions
                     "Apenas equipe administrativa."
                 );
             }
+
             const callerRole = normRole(caller);
             let cidadesGerente = [];
             if (callerRole === "master_city") {
@@ -137,51 +195,37 @@ exports.painelEntregadoresAtualizacoesPendentes = functions
                 }
             }
 
-            // Exige índice de collection group `documentos` + `status` (ver firestore.indexes.json).
-            const snap = await db
-                .collectionGroup("documentos")
-                .where("status", "==", "pendente")
-                .limit(400)
+            // Entregadores já APROVADOS — índice role+entregador_status já existe.
+            const entregadoresSnap = await db
+                .collection("users")
+                .where("role", "==", "entregador")
+                .where("entregador_status", "==", "aprovado")
                 .get();
-            const items = [];
-            const seenPath = new Set();
 
-            for (const doc of snap.docs) {
-                const docId = doc.id;
-                if (docId !== "cnh" && docId !== "crlv") continue;
-                const parsed = parseDocumentoPath(doc.ref.path);
-                if (!parsed) continue;
-
-                const userSnap = await db
-                    .collection("users")
-                    .doc(parsed.uid)
-                    .get();
-                if (!userSnap.exists) continue;
-                const u = userSnap.data() || {};
-                if (String(u.role || "").trim().toLowerCase() !== "entregador") {
-                    continue;
-                }
-                if (
-                    String(u.entregador_status || "").trim().toLowerCase() !==
-                    "aprovado"
-                ) {
-                    continue;
-                }
+            const entregadoresFiltrados = [];
+            for (const doc of entregadoresSnap.docs) {
+                const u = doc.data() || {};
                 if (cidadesGerente.length > 0) {
                     const c = String(u.cidade || "").trim();
                     if (!cidadesGerente.includes(c)) continue;
                 }
+                entregadoresFiltrados.push({ uid: doc.id, userData: u });
+            }
 
-                const d = doc.data() || {};
-                const row = {
-                    documentPath: doc.ref.path,
-                    uid: parsed.uid,
-                    tipoDoc: parsed.tipoDoc,
-                    veiculoId: parsed.veiculoId,
-                    data: dadoParaJson(d),
-                };
-                if (!seenPath.has(row.documentPath)) {
-                    seenPath.add(row.documentPath);
+            // Paraleliza por entregador (20 por vez).
+            const blocos = await emLotes(
+                entregadoresFiltrados,
+                20,
+                ({ uid, userData }) =>
+                    coletarPendentesDoEntregador(db, uid, userData)
+            );
+
+            const items = [];
+            const vistos = new Set();
+            for (const bloco of blocos) {
+                for (const row of bloco) {
+                    if (vistos.has(row.documentPath)) continue;
+                    vistos.add(row.documentPath);
                     items.push(row);
                 }
             }
@@ -197,7 +241,7 @@ exports.painelEntregadoresAtualizacoesPendentes = functions
                 return 0;
             });
 
-            return { ok: true, items };
+            return { ok: true, items, total: items.length };
         } catch (e) {
             if (e instanceof functions.https.HttpsError) {
                 throw e;
@@ -211,10 +255,8 @@ exports.painelEntregadoresAtualizacoesPendentes = functions
             ) {
                 throw new functions.https.HttpsError(
                     "failed-precondition",
-                    "Índice do Firestore ausente ou em construção para a " +
-                        "busca de documentos. " +
-                        "Implante as regras de índice (firebase deploy --only firestore:indexes) " +
-                        "e aguarde o índice ativar, ou tente de novo em alguns minutos."
+                    "Índice do Firestore ausente ou em construção. " +
+                        "Implante `firestore.indexes.json` e aguarde os índices ativarem."
                 );
             }
             throw new functions.https.HttpsError(

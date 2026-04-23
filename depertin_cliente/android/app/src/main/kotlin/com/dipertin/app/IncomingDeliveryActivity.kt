@@ -260,26 +260,24 @@ class IncomingDeliveryActivity : AppCompatActivity() {
             openMainRadar()
             return
         }
-        NotificationUtils.cancelIncomingNotification(this, orderId)
+        // Resposta instantânea na UI: para o toque, cancela a notificação,
+        // marca aceito e já navega para o radar. A callable da Cloud Function
+        // continua em background; o Firestore stream reflete a verdade no
+        // radar. Se a callable falhar (corrida já aceita por outro), o radar
+        // simplesmente não mostra entrega ativa e o entregador recebe a
+        // próxima oferta normalmente.
         stopRingtone()
+        NotificationUtils.cancelIncomingNotification(this, orderId)
         activeAction = "accept"
-        setLoading(true)
+        timer?.cancel()
+        IncomingDeliveryFlowState.markAccepted(requestId)
         IncomingDeliveryRepository.aceitar(orderId) { ok, msg ->
-            runOnUiThread {
-                if (isFinishing) return@runOnUiThread
-                NotificationUtils.cancelIncomingNotification(this, orderId)
-                if (ok) {
-                    IncomingDeliveryFlowState.markAccepted(requestId)
-                    openMainRadar()
-                } else {
-                    IncomingDeliveryFlowState.markCancelled(requestId)
-                    if (!msg.isNullOrBlank()) {
-                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-                    }
-                    setLoading(false)
-                }
+            if (!ok) {
+                IncomingDeliveryFlowState.markCancelled(requestId)
+                Log.w(tag, "Aceite falhou em background: ${msg ?: "erro"}")
             }
         }
+        openMainRadar()
     }
 
     private fun handleReject() {
@@ -287,25 +285,20 @@ class IncomingDeliveryActivity : AppCompatActivity() {
             finish()
             return
         }
-        NotificationUtils.cancelIncomingNotification(this, orderId)
+        // Resposta instantânea: encerra a tela imediatamente e dispara a
+        // recusa em background. Se a callable falhar, a oferta expira por
+        // timeout no backend — não há benefício em travar a UI esperando.
         stopRingtone()
+        NotificationUtils.cancelIncomingNotification(this, orderId)
         activeAction = "reject"
-        setLoading(true)
+        timer?.cancel()
+        IncomingDeliveryFlowState.markRejected(requestId)
         IncomingDeliveryRepository.recusar(orderId) { ok, msg ->
-            runOnUiThread {
-                if (isFinishing) return@runOnUiThread
-                NotificationUtils.cancelIncomingNotification(this, orderId)
-                if (!ok && !msg.isNullOrBlank()) {
-                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-                }
-                if (ok) {
-                    IncomingDeliveryFlowState.markRejected(requestId)
-                } else {
-                    IncomingDeliveryFlowState.markCancelled(requestId)
-                }
-                finish()
+            if (!ok) {
+                Log.w(tag, "Recusa falhou em background: ${msg ?: "erro"}")
             }
         }
+        finish()
     }
 
     private fun firstNonBlank(vararg values: String?): String {

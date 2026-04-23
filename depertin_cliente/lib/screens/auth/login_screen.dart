@@ -4,13 +4,16 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../auth/google_auth_helper.dart';
+import '../../services/biometria_service.dart';
 import '../../services/conta_bloqueio_entregador_service.dart';
 import '../../services/conta_bloqueio_lojista_service.dart';
 import '../../services/conta_exclusao_service.dart';
 import '../../widgets/entregador_conta_bloqueada_overlay.dart';
 import '../../widgets/lojista_conta_bloqueada_overlay.dart';
 import '../../services/location_service.dart';
+import 'ativacao_biometria_screen.dart';
 import 'recuperar_senha_screen.dart';
 import 'register_screen.dart';
 import 'aceite_termos_google_screen.dart';
@@ -34,6 +37,14 @@ class _LoginScreenState extends State<LoginScreen> {
   final _senhaController = TextEditingController();
   bool _isLoading = false;
   bool _senhaOculta = true;
+  bool _biometriaDisponivelParaLogin = false;
+
+  /// Evita pedir a ativação da biometria várias vezes se o usuário
+  /// declinou recentemente. Cooldown gravado em SharedPreferences.
+  static const _kPrefConviteCooldownHorasAteProxima = 72;
+  static const _kPrefChaveConviteDeclinadoEm = 'biometria_convite_declinado_em';
+  static const _kPrefChaveConviteJaOferecidoParaUid =
+      'biometria_convite_ja_oferecido_uids';
 
   @override
   void initState() {
@@ -42,6 +53,13 @@ class _LoginScreenState extends State<LoginScreen> {
     if (email.isNotEmpty) {
       _emailController.text = email;
     }
+    _verificarDisponibilidadeBiometriaLogin();
+  }
+
+  Future<void> _verificarDisponibilidadeBiometriaLogin() async {
+    final pode = await BiometriaService.instancia.podeUsarLoginBiometrico();
+    if (!mounted) return;
+    setState(() => _biometriaDisponivelParaLogin = pode);
   }
 
   InputDecoration _decorCampo(String label, IconData icon) {
@@ -339,6 +357,314 @@ class _LoginScreenState extends State<LoginScreen> {
     return true;
   }
 
+  /// Fluxo completo acionado pelo botão "Acessar por Digital" na tela de login.
+  /// Exige vínculo biométrico ativo no dispositivo.
+  Future<void> _entrarPorDigital() async {
+    if (_isLoading) return;
+    final bio = BiometriaService.instancia;
+
+    final disp = await bio.consultarDisponibilidade(forcarRefresh: true);
+    if (!mounted) return;
+    if (!disp.disponivelParaUso) {
+      _biometriaDisponivelParaLogin = false;
+      await bio.desativar();
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Seu aparelho não tem biometria cadastrada. '
+            'Configure a digital no sistema e entre com e-mail e senha.',
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final vinculo = await bio.lerVinculo();
+    if (!mounted) return;
+    if (vinculo == null) {
+      setState(() => _biometriaDisponivelParaLogin = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Biometria não ativada neste aparelho. Faça login normalmente '
+            'e depois ative o acesso por digital.',
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final resultado = await bio.autenticarComBiometria(
+      razao: 'Confirme sua digital para entrar no DiPertin.',
+    );
+    if (!mounted) return;
+
+    switch (resultado) {
+      case BiometriaResultado.cancelado:
+        return;
+      case BiometriaResultado.indisponivel:
+        await bio.desativar();
+        if (!mounted) return;
+        setState(() => _biometriaDisponivelParaLogin = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'A biometria do aparelho foi removida. '
+              'Entre com e-mail e senha e reative a digital.',
+            ),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      case BiometriaResultado.falhou:
+      case BiometriaResultado.erro:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Não conseguimos validar sua digital. Tente novamente ou '
+              'entre com e-mail e senha.',
+            ),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      case BiometriaResultado.sucesso:
+        break;
+    }
+
+    await _executarLoginAposBiometria(vinculo);
+  }
+
+  /// Executa o login real no Firebase usando o vínculo biométrico.
+  /// Se a credencial salva estiver inconsistente, limpa o vínculo e redireciona
+  /// o usuário para login normal.
+  Future<void> _executarLoginAposBiometria(BiometriaVinculo vinculo) async {
+    setState(() => _isLoading = true);
+    try {
+      User? user;
+      if (vinculo.metodo == BiometriaMetodoLogin.emailSenha) {
+        final senha = (vinculo.senhaSegura ?? '').trim();
+        if (senha.isEmpty) {
+          await _biometriaInconsistente(
+            'Vínculo biométrico inválido. Entre com e-mail e senha para '
+            'reativar o acesso por digital.',
+          );
+          return;
+        }
+        final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: vinculo.email,
+          password: senha,
+        );
+        user = cred.user;
+      } else {
+        final cred = await signInWithGoogleSilentForFirebase(
+          emailEsperado: vinculo.email,
+        );
+        user = cred.user;
+      }
+
+      if (user == null) {
+        await _biometriaInconsistente(
+          'Não foi possível completar o login. Tente com e-mail e senha.',
+        );
+        return;
+      }
+
+      final uid = user.uid;
+      if (!await _podeUsarAppMobile(uid)) return;
+      await ContaExclusaoService.cancelarExclusaoPendenteSeNecessario(uid);
+      await _atualizarTokenAposLogin(uid);
+      final podeEntrar = await _contaOperacionalPodeEntrarAposLogin(uid);
+      if (!podeEntrar) return;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bem-vindo(a) de volta!'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        _fecharAposLoginSucesso();
+      }
+    } on FirebaseAuthException catch (e) {
+      debugPrint('Login biométrico falhou: ${e.code} ${e.message}');
+      // Credencial inválida → vínculo obsoleto, limpa tudo.
+      if (e.code == 'wrong-password' ||
+          e.code == 'invalid-credential' ||
+          e.code == 'user-not-found' ||
+          e.code == 'user-disabled') {
+        await _biometriaInconsistente(
+          'Suas credenciais foram alteradas. Entre com e-mail e senha '
+          'e reative a digital.',
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Firebase: ${e.code} — ${e.message ?? ''}'),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Login biométrico erro: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro no login biométrico: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _biometriaInconsistente(String mensagem) async {
+    await BiometriaService.instancia.desativar();
+    if (!mounted) return;
+    setState(() => _biometriaDisponivelParaLogin = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(mensagem),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // ---------------------- Oferta de ativação pós-login --------------------
+
+  Future<bool> _jaOfereceuParaEsseUid(String uid) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lista =
+          prefs.getStringList(_kPrefChaveConviteJaOferecidoParaUid) ?? [];
+      return lista.contains(uid);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _marcarConviteMostrado(String uid) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lista =
+          prefs.getStringList(_kPrefChaveConviteJaOferecidoParaUid) ?? [];
+      if (!lista.contains(uid)) {
+        lista.add(uid);
+        await prefs.setStringList(
+            _kPrefChaveConviteJaOferecidoParaUid, lista);
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> _dentroDoCooldownDeDeclineRecente() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ms = prefs.getInt(_kPrefChaveConviteDeclinadoEm);
+      if (ms == null) return false;
+      final declinouEm = DateTime.fromMillisecondsSinceEpoch(ms);
+      final agora = DateTime.now();
+      return agora.difference(declinouEm).inHours <
+          _kPrefConviteCooldownHorasAteProxima;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _registrarDeclineConvite() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_kPrefChaveConviteDeclinadoEm,
+          DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
+
+  /// Se ainda não ativou biometria para este uid neste aparelho, abre a tela
+  /// premium de convite. Só é chamado APÓS login real bem-sucedido.
+  Future<void> _oferecerAtivacaoBiometriaSeNecessario({
+    required String uid,
+    required String email,
+    required BiometriaMetodoLogin metodo,
+    String? senhaParaVinculo,
+  }) async {
+    try {
+      final bio = BiometriaService.instancia;
+      // Já está ativada para este uid? Nada a fazer.
+      final atual = await bio.lerVinculo();
+      if (atual != null && atual.uid == uid) return;
+
+      // Se havia outro vínculo (outro uid), limpa antes de oferecer novo.
+      if (atual != null && atual.uid != uid) {
+        await bio.desativar();
+      }
+
+      // O aparelho suporta e tem biometria cadastrada?
+      final podeOferecer = await bio.podeOferecerAtivacao();
+      if (!podeOferecer) return;
+
+      // Cooldown de "Agora não" recente.
+      if (await _dentroDoCooldownDeDeclineRecente()) {
+        // Ainda assim marca como já oferecido para não insistir.
+        await _marcarConviteMostrado(uid);
+        return;
+      }
+
+      // Já ofereceu para esse uid neste aparelho e ele declinou antes?
+      if (await _jaOfereceuParaEsseUid(uid) &&
+          await _dentroDoCooldownDeDeclineRecente()) {
+        return;
+      }
+
+      if (!mounted) return;
+      final AtivacaoBiometriaResultado? resultado =
+          await Navigator.of(context).push<AtivacaoBiometriaResultado>(
+        MaterialPageRoute<AtivacaoBiometriaResultado>(
+          fullscreenDialog: true,
+          builder: (_) => AtivacaoBiometriaScreen(
+            uid: uid,
+            email: email,
+            metodo: metodo,
+            senhaParaVinculo: senhaParaVinculo,
+          ),
+        ),
+      );
+      await _marcarConviteMostrado(uid);
+      if (!mounted) return;
+
+      if (resultado?.ativou == true) {
+        setState(() => _biometriaDisponivelParaLogin = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Pronto! Da próxima vez, entre usando "Acessar por Digital".',
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else if (resultado?.declinou == true) {
+        await _registrarDeclineConvite();
+      }
+    } catch (e) {
+      debugPrint('oferecer biometria: $e');
+    }
+  }
+
   Future<void> _fazerLogin() async {
     if (!RegExp(
       r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
@@ -369,6 +695,16 @@ class _LoginScreenState extends State<LoginScreen> {
         await _atualizarTokenAposLogin(uid);
         final podeEntrar = await _contaOperacionalPodeEntrarAposLogin(uid);
         if (!podeEntrar) return;
+
+        // Primeiro login autorizado → oferece ativação biométrica.
+        final emailLimpo = _emailController.text.trim();
+        final senhaLimpa = _senhaController.text.trim();
+        await _oferecerAtivacaoBiometriaSeNecessario(
+          uid: uid,
+          email: emailLimpo,
+          metodo: BiometriaMetodoLogin.emailSenha,
+          senhaParaVinculo: senhaLimpa,
+        );
       }
 
       if (mounted) {
@@ -552,6 +888,15 @@ class _LoginScreenState extends State<LoginScreen> {
       await _atualizarTokenAposLogin(user.uid);
       final podeEntrar = await _contaOperacionalPodeEntrarAposLogin(user.uid);
       if (!podeEntrar) return;
+
+      // Primeiro login Google autorizado → oferece ativação biométrica
+      // (sem senha, método google — re-login futuro via signInSilently).
+      await _oferecerAtivacaoBiometriaSeNecessario(
+        uid: user.uid,
+        email: user.email ?? '',
+        metodo: BiometriaMetodoLogin.google,
+      );
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -602,6 +947,66 @@ class _LoginScreenState extends State<LoginScreen> {
     _emailController.dispose();
     _senhaController.dispose();
     super.dispose();
+  }
+
+  Widget _botaoAcessarPorDigital() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_diPertinRoxo, Color(0xFF8E24AA)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: _diPertinRoxo.withValues(alpha: 0.30),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: _isLoading ? null : _entrarPorDigital,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 52),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.fingerprint_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Flexible(
+                  child: Text(
+                    'Acessar por Digital',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -746,6 +1151,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
               ),
+              if (_biometriaDisponivelParaLogin) ...[
+                const SizedBox(height: 14),
+                _botaoAcessarPorDigital(),
+              ],
               const SizedBox(height: 22),
               Row(
                 children: [

@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../../services/biometria_service.dart';
 import '../../services/firebase_functions_config.dart';
 import 'package:intl/intl.dart';
 
@@ -380,6 +381,15 @@ class _EntregadorCarteiraScreenState extends State<EntregadorCarteiraScreen> {
       return;
     }
 
+    // Confirmação biométrica antes de consumir o saldo — protege contra
+    // saques acidentais e acessos rápidos por terceiros ao aparelho
+    // destravado. O `sheet` fica aberto durante o prompt: em caso de
+    // cancelamento ou falha, o entregador pode tentar de novo sem
+    // redigitar os dados.
+    final autorizado = await _autenticarSaqueComBiometria(valorSolicitado);
+    if (!autorizado) return;
+
+    if (!sheetContext.mounted) return;
     Navigator.pop(sheetContext);
     setState(() => _solicitando = true);
 
@@ -425,6 +435,84 @@ class _EntregadorCarteiraScreenState extends State<EntregadorCarteiraScreen> {
       }
     } finally {
       if (mounted) setState(() => _solicitando = false);
+    }
+  }
+
+  /// Garante que o saque PIX só seja disparado após confirmação biométrica
+  /// (digital/face) nos aparelhos que suportam. Em dispositivos sem
+  /// biometria cadastrada, seguimos adiante (comportamento legado), mas
+  /// exibimos um aviso incentivando a ativação em Conta e Segurança.
+  ///
+  /// Retorna `true` quando o saque pode prosseguir.
+  Future<bool> _autenticarSaqueComBiometria(double valor) async {
+    final servico = BiometriaService.instancia;
+    final disponibilidade =
+        await servico.consultarDisponibilidade(forcarRefresh: true);
+
+    if (!disponibilidade.disponivelParaUso) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.orange.shade800,
+            content: const Text(
+              'Seu aparelho não tem biometria ativada. Para mais segurança, '
+              'cadastre uma digital/face no sistema e ative em Conta e '
+              'segurança antes do próximo saque.',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+      return true;
+    }
+
+    final resultado = await servico.autenticarComBiometria(
+      razao:
+          'Confirme o saque de ${_moeda.format(valor)} com sua digital ou reconhecimento facial.',
+    );
+
+    switch (resultado) {
+      case BiometriaResultado.sucesso:
+        return true;
+      case BiometriaResultado.cancelado:
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Confirmação biométrica cancelada.'),
+              backgroundColor: Colors.grey,
+            ),
+          );
+        }
+        return false;
+      case BiometriaResultado.falhou:
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Biometria não reconhecida. Tente novamente para liberar o saque.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return false;
+      case BiometriaResultado.indisponivel:
+        // Aparelho perdeu a biometria entre a leitura inicial e o prompt
+        // (ex.: usuário removeu digital agora). Segue o fluxo para não
+        // travar o saque; o backend ainda valida o usuário autenticado.
+        return true;
+      case BiometriaResultado.erro:
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Não foi possível validar a biometria agora. Tente de novo.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return false;
     }
   }
 
@@ -720,41 +808,53 @@ class _EntregadorCarteiraScreenState extends State<EntregadorCarteiraScreen> {
                           ),
                         ),
                         if (saquesLoading && !historicoPronto)
-                          const SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: Center(child: CircularProgressIndicator()),
+                          const SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(vertical: 32),
+                              child: Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            ),
                           )
                         else if (docs.isEmpty)
-                          SliverFillRemaining(
-                            hasScrollBody: false,
+                          // Estado vazio compacto — IMPORTANTE: não usar
+                          // SliverFillRemaining aqui porque ele ocupa toda a
+                          // viewport restante e esconde a seção "Créditos —
+                          // corrida cancelada" que vem logo abaixo
+                          // (_sliverCreditosCorridaCancelada). Mantemos o
+                          // visual de "empty state" em cartão compacto para
+                          // que o conteúdo abaixo fique naturalmente visível.
+                          SliverToBoxAdapter(
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 32,
+                              padding: const EdgeInsets.fromLTRB(
+                                32,
+                                8,
+                                32,
+                                24,
                               ),
                               child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Icon(
                                     Icons.receipt_long_outlined,
-                                    size: 56,
+                                    size: 48,
                                     color: Colors.grey[400],
                                   ),
-                                  const SizedBox(height: 16),
+                                  const SizedBox(height: 12),
                                   Text(
                                     'Nenhum saque ainda',
                                     style: TextStyle(
-                                      fontSize: 17,
+                                      fontSize: 16,
                                       fontWeight: FontWeight.w600,
                                       color: Colors.grey[700],
                                     ),
                                   ),
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: 6),
                                   Text(
                                     'Quando você solicitar um repasse, o valor e o status '
                                     'aparecem aqui.',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: 13,
                                       height: 1.4,
                                       color: Colors.grey[600],
                                     ),

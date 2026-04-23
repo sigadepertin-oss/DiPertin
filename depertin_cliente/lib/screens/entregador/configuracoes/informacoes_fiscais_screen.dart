@@ -1,9 +1,18 @@
 // Arquivo: lib/screens/entregador/configuracoes/informacoes_fiscais_screen.dart
 //
 // Agrega em tempo real os pedidos entregues pelo entregador (campo
-// `entregador_id`) e resume por ano/mês, sem depender do doc agregado em
-// `fiscal/{uid}` (que só é preenchido a partir do deploy da CF). Dessa forma
-// o histórico antigo também aparece.
+// `entregador_id`) e resume por ano/mês.
+//
+// Regras de leitura:
+// - `valor_frete` (padrão) ou `taxa_entrega` (legado) → ganho bruto do frete.
+// - `taxa_entregador` → comissão da plataforma sobre o frete.
+// - `valor_liquido_entregador` → ganho líquido (preenchido pelo backend).
+// - Fallback de data: entregue_em > data_entrega > atualizado_em > criado_em.
+//
+// Auto-seleção: ao abrir a tela, se o período atual não tem corridas mas o
+// entregador tem corridas em outro período, pulamos automaticamente para o
+// período da corrida mais recente. Assim o Carlos vê os dados dele logo de
+// cara em vez de ver tudo zerado em 2026.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -26,6 +35,7 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
   late final TabController _tabs;
   int _anoSelecionado = DateTime.now().year;
   int _mesSelecionado = DateTime.now().month;
+  bool _periodoAjustadoAutomaticamente = false;
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
@@ -58,19 +68,40 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
     return 0;
   }
 
-  /// Extrai a melhor data possível do pedido (entregue_em > data_entrega > atualizado_em > criado_em).
+  /// Extrai a melhor data possível do pedido.
+  ///
+  /// Importante: o app grava a conclusão em `data_entregue` e a criação em
+  /// `data_pedido` (é assim que a tela Histórico localiza as corridas).
+  /// Também aceitamos nomes alternativos em inglês e legados em snake_case
+  /// para não perder pedidos antigos.
   DateTime? _dataDoPedido(Map<String, dynamic> p) {
     for (final k in const [
+      'data_entregue',
       'entregue_em',
       'data_entrega',
+      'delivered_at',
+      'data_pedido',
       'atualizado_em',
       'criado_em',
+      'created_at',
     ]) {
       final v = p[k];
       if (v is Timestamp) return v.toDate();
       if (v is DateTime) return v;
     }
     return null;
+  }
+
+  /// Ganho bruto do frete — aceita nomes de campo antigos e novos.
+  double _brutoFretePedido(Map<String, dynamic> p) {
+    final valorFrete = _n(p['valor_frete']);
+    if (valorFrete > 0) return valorFrete;
+    final taxaEntrega = _n(p['taxa_entrega']);
+    if (taxaEntrega > 0) return taxaEntrega;
+    // Último recurso: líquido + taxa, caso o backend tenha gravado apenas isso.
+    final liquido = _n(p['valor_liquido_entregador']);
+    final taxa = _n(p['taxa_entregador']);
+    return (liquido + taxa).clamp(0, double.infinity).toDouble();
   }
 
   /// Calcula o resumo financeiro a partir da lista de pedidos entregues.
@@ -90,14 +121,10 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
       final dt = _dataDoPedido(p);
       if (dt == null || !filtroData(dt)) continue;
 
-      // Ganho bruto = frete total (taxa_entrega / valor_frete).
-      final brutoPedido = _n(p['valor_frete']) > 0
-          ? _n(p['valor_frete'])
-          : _n(p['taxa_entrega']);
+      final brutoPedido = _brutoFretePedido(p);
       final taxaPedido = _n(p['taxa_entregador']);
       double liquidoPedido = _n(p['valor_liquido_entregador']);
       if (liquidoPedido == 0 && brutoPedido > 0) {
-        // Fallback: calcula na mão se o campo ainda não foi populado.
         liquidoPedido = (brutoPedido - taxaPedido).clamp(0, double.infinity);
       }
 
@@ -113,6 +140,59 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
       liquido: liquido,
       corridas: corridas,
     );
+  }
+
+  /// Retorna a data da corrida mais recente (entregue) — ou null se não houver.
+  DateTime? _dataMaisRecente(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    DateTime? maior;
+    for (final d in docs) {
+      final p = d.data();
+      final status = (p['status'] ?? '').toString();
+      if (status != 'entregue') continue;
+      final dt = _dataDoPedido(p);
+      if (dt == null) continue;
+      if (maior == null || dt.isAfter(maior)) maior = dt;
+    }
+    return maior;
+  }
+
+  /// Se o período selecionado ainda é o default (ano/mês atual) e não há
+  /// corridas nele, mas o entregador tem corridas em outro período, pula
+  /// automaticamente para o período da entrega mais recente.
+  void _talvezAjustarPeriodoAutomaticamente(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    if (_periodoAjustadoAutomaticamente) return;
+    final hoje = DateTime.now();
+    final anoAtual = hoje.year;
+    final mesAtual = hoje.month;
+    if (_anoSelecionado != anoAtual || _mesSelecionado != mesAtual) {
+      _periodoAjustadoAutomaticamente = true;
+      return;
+    }
+    final resumoAtual = _calcular(
+      docs,
+      filtroData: (dt) => dt.year == anoAtual && dt.month == mesAtual,
+    );
+    if (resumoAtual.corridas > 0) {
+      _periodoAjustadoAutomaticamente = true;
+      return;
+    }
+    final maisRecente = _dataMaisRecente(docs);
+    if (maisRecente == null) {
+      _periodoAjustadoAutomaticamente = true;
+      return;
+    }
+    _periodoAjustadoAutomaticamente = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _anoSelecionado = maisRecente.year;
+        _mesSelecionado = maisRecente.month;
+      });
+    });
   }
 
   @override
@@ -159,6 +239,7 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
                   );
                 }
                 final docs = snap.data!.docs;
+                _talvezAjustarPeriodoAutomaticamente(docs);
                 return TabBarView(
                   controller: _tabs,
                   children: [
@@ -172,7 +253,6 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
   }
 
   Widget _tabAnual(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
-    final resumoTotal = _calcular(docs, filtroData: (_) => true);
     final resumoAno = _calcular(
       docs,
       filtroData: (dt) => dt.year == _anoSelecionado,
@@ -181,7 +261,10 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
       children: [
         _SeletorAno(
           ano: _anoSelecionado,
-          onChange: (a) => setState(() => _anoSelecionado = a),
+          onChange: (a) {
+            _periodoAjustadoAutomaticamente = true;
+            setState(() => _anoSelecionado = a);
+          },
         ),
         Expanded(
           child: ListView(
@@ -191,8 +274,6 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
                 resumo: resumoAno,
                 periodo: 'Ano $_anoSelecionado',
               ),
-              const SizedBox(height: 10),
-              _BlocoTotalHistorico(resumo: resumoTotal),
               const SizedBox(height: 24),
             ],
           ),
@@ -216,6 +297,7 @@ class _InformacoesFiscaisScreenState extends State<InformacoesFiscaisScreen>
           ano: _anoSelecionado,
           mes: _mesSelecionado,
           onChange: (ano, mes) {
+            _periodoAjustadoAutomaticamente = true;
             setState(() {
               _anoSelecionado = ano;
               _mesSelecionado = mes;
@@ -352,6 +434,7 @@ class _ResumoFiscal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+    final semDados = resumo.corridas == 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -389,96 +472,56 @@ class _ResumoFiscal extends StatelessWidget {
           cor: _roxo,
         ),
         const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: _roxo.withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.info_outline, color: _roxo, size: 18),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Os valores são atualizados em tempo real a cada entrega. '
-                  'A exportação em PDF e o envio automático por e-mail chegarão em breve.',
-                  style: TextStyle(color: Colors.black54, fontSize: 12),
-                ),
+        if (semDados)
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: Colors.orange.withValues(alpha: 0.30),
               ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _BlocoTotalHistorico extends StatelessWidget {
-  final _ResumoCalculado resumo;
-  const _BlocoTotalHistorico({required this.resumo});
-
-  @override
-  Widget build(BuildContext context) {
-    final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _laranja.withValues(alpha: 0.35)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Acumulado total do entregador',
-            style: TextStyle(fontWeight: FontWeight.bold, color: _roxo),
-          ),
-          const SizedBox(height: 10),
-          _LinhaTotal(
-              rotulo: 'Ganhos brutos', valor: moeda.format(resumo.brutos)),
-          _LinhaTotal(
-              rotulo: 'Taxas da plataforma',
-              valor: moeda.format(resumo.taxas)),
-          _LinhaTotal(
-              rotulo: 'Ganhos líquidos',
-              valor: moeda.format(resumo.liquido)),
-          _LinhaTotal(
-              rotulo: 'Total de corridas',
-              valor: resumo.corridas.toString()),
-        ],
-      ),
-    );
-  }
-}
-
-class _LinhaTotal extends StatelessWidget {
-  final String rotulo;
-  final String valor;
-  const _LinhaTotal({required this.rotulo, required this.valor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            rotulo,
-            style: const TextStyle(color: Colors.black54, fontSize: 13),
-          ),
-          Text(
-            valor,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline,
+                    color: Color(0xFFE65100), size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Nenhuma corrida entregue neste período. '
+                    'Use as setas para navegar por outros meses ou anos.',
+                    style: TextStyle(color: Colors.black87, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _roxo.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, color: _roxo, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Os valores são atualizados em tempo real a cada entrega. '
+                    'A exportação em PDF e o envio automático por e-mail '
+                    'chegarão em breve.',
+                    style: TextStyle(color: Colors.black54, fontSize: 12),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

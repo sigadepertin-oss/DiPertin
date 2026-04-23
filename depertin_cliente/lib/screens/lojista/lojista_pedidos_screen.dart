@@ -11,11 +11,139 @@ import 'package:flutter/material.dart';
 
 import 'package:depertin_cliente/constants/pedido_status.dart';
 import 'package:depertin_cliente/services/firebase_functions_config.dart';
+import 'package:depertin_cliente/utils/lojista_acesso_app.dart';
 import 'package:depertin_cliente/widgets/badge_entregador_acessibilidade.dart';
 import 'package:depertin_cliente/widgets/chat_pedido_botao.dart';
 
 const Color diPertinRoxo = Color(0xFF6A1B9A);
 const Color diPertinLaranja = Color(0xFFFF8F00);
+const Color _diPertinRoxoEscuro = Color(0xFF4A0B7C);
+const Color _fundoTela = Color(0xFFF7F5FA);
+const Color _tintaForte = Color(0xFF17162A);
+const Color _tintaMedia = Color(0xFF5A5870);
+const Color _tintaSuave = Color(0xFF8E8BA0);
+const Color _bordaSuave = Color(0xFFECE8F2);
+const Color _verdeSucesso = Color(0xFF0F9D6B);
+const Color _vermelhoPerigo = Color(0xFFDC3545);
+const Color _ambarAviso = Color(0xFFB7791F);
+const Color _azulInfo = Color(0xFF2E6BE6);
+
+/// Cor principal + fundo suave + borda, por status do pedido.
+({Color principal, Color fundo, Color borda}) _paletaStatus(String status) {
+  switch (status) {
+    case PedidoStatus.pendente:
+      return (
+        principal: _vermelhoPerigo,
+        fundo: const Color(0xFFFFF1F2),
+        borda: const Color(0xFFFBD5D8),
+      );
+    case PedidoStatus.aceito:
+    case PedidoStatus.emPreparo:
+      return (
+        principal: diPertinLaranja,
+        fundo: const Color(0xFFFFF6E6),
+        borda: const Color(0xFFFFDEA8),
+      );
+    case PedidoStatus.aguardandoEntregador:
+    case PedidoStatus.entregadorIndoLoja:
+      return (
+        principal: _azulInfo,
+        fundo: const Color(0xFFEFF5FE),
+        borda: const Color(0xFFC8DAF9),
+      );
+    case PedidoStatus.saiuEntrega:
+    case PedidoStatus.emRota:
+    case PedidoStatus.aCaminho:
+      return (
+        principal: diPertinRoxo,
+        fundo: const Color(0xFFF5EDFA),
+        borda: const Color(0xFFDCC6EB),
+      );
+    case PedidoStatus.pronto:
+      return (
+        principal: const Color(0xFF0F766E),
+        fundo: const Color(0xFFE6FAF6),
+        borda: const Color(0xFFB6E9DD),
+      );
+    case PedidoStatus.entregue:
+      return (
+        principal: _verdeSucesso,
+        fundo: const Color(0xFFE7F6EE),
+        borda: const Color(0xFFBFE5CF),
+      );
+    case PedidoStatus.cancelado:
+      return (
+        principal: _vermelhoPerigo,
+        fundo: const Color(0xFFFBEBEC),
+        borda: const Color(0xFFF3C7CA),
+      );
+    default:
+      return (
+        principal: _tintaMedia,
+        fundo: const Color(0xFFF2F1F6),
+        borda: _bordaSuave,
+      );
+  }
+}
+
+IconData _iconePorStatus(String status) {
+  switch (status) {
+    case PedidoStatus.pendente:
+      return Icons.mark_chat_unread_rounded;
+    case PedidoStatus.aceito:
+      return Icons.check_circle_outline_rounded;
+    case PedidoStatus.emPreparo:
+      return Icons.soup_kitchen_rounded;
+    case PedidoStatus.aguardandoEntregador:
+      return Icons.radar_rounded;
+    case PedidoStatus.entregadorIndoLoja:
+      return Icons.directions_bike_rounded;
+    case PedidoStatus.saiuEntrega:
+    case PedidoStatus.emRota:
+    case PedidoStatus.aCaminho:
+      return Icons.local_shipping_rounded;
+    case PedidoStatus.pronto:
+      return Icons.storefront_rounded;
+    case PedidoStatus.entregue:
+      return Icons.task_alt_rounded;
+    case PedidoStatus.cancelado:
+      return Icons.cancel_outlined;
+    default:
+      return Icons.receipt_long_rounded;
+  }
+}
+
+/// Ex.: "agora", "há 5 min", "há 2 h", "ontem", "12/04 às 14:22".
+String _tempoRelativo(Timestamp? ts) {
+  if (ts == null) return 'agora';
+  final agora = DateTime.now();
+  final d = ts.toDate();
+  final diff = agora.difference(d);
+  if (diff.inSeconds < 45) return 'agora';
+  if (diff.inMinutes < 60) return 'há ${diff.inMinutes} min';
+  if (diff.inHours < 12) return 'há ${diff.inHours} h';
+  final mesmaData = agora.year == d.year &&
+      agora.month == d.month &&
+      agora.day == d.day;
+  if (mesmaData) {
+    return 'hoje às ${d.hour.toString().padLeft(2, '0')}:'
+        '${d.minute.toString().padLeft(2, '0')}';
+  }
+  final ontem = agora.subtract(const Duration(days: 1));
+  final eraOntem = ontem.year == d.year &&
+      ontem.month == d.month &&
+      ontem.day == d.day;
+  if (eraOntem) {
+    return 'ontem às ${d.hour.toString().padLeft(2, '0')}:'
+        '${d.minute.toString().padLeft(2, '0')}';
+  }
+  return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')} '
+      'às ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+}
+
+const List<FontFeature> _numerosTabulares = [
+  FontFeature.tabularFigures(),
+];
 
 class LojistaPedidosScreen extends StatefulWidget {
   const LojistaPedidosScreen({super.key, this.uidLoja});
@@ -29,6 +157,7 @@ class LojistaPedidosScreen extends StatefulWidget {
 class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
   late final String _uid =
       widget.uidLoja ?? FirebaseAuth.instance.currentUser!.uid;
+  final String _authUid = FirebaseAuth.instance.currentUser!.uid;
 
   late final Stream<QuerySnapshot> _streamPedidosLoja = FirebaseFirestore
       .instance
@@ -38,6 +167,7 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   StreamSubscription<QuerySnapshot>? _pedidosSubscription;
+  StreamSubscription<DocumentSnapshot>? _userDocSub;
   bool _primeiroCarregamento = true;
   bool _continuarBuscaEntregadorEmProgresso = false;
   final Set<String> _solicitandoEntregadorEmProgresso = <String>{};
@@ -46,17 +176,39 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
   final Set<String> _abrindoConfirmacaoChamarDeNovo = <String>{};
   final Set<String> _chamandoDeNovoEmProgresso = <String>{};
 
+  /// Dono (sem `lojista_owner_uid`) = 3. Colaborador = `painel_colaborador_nivel`.
+  /// Apenas nível >= 3 (dono + colaborador nível III) pode ver a caixa financeira.
+  int _nivelAcesso = 3;
+  bool get _podeVerFinanceiro => _nivelAcesso >= 3;
+
   @override
   void initState() {
     super.initState();
     _iniciarVigiaDePedidos();
+    _escutarNivelAcesso();
   }
 
   @override
   void dispose() {
     _pedidosSubscription?.cancel();
+    _userDocSub?.cancel();
     _audioPlayer.dispose();
     super.dispose();
+  }
+
+  void _escutarNivelAcesso() {
+    _userDocSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_authUid)
+        .snapshots()
+        .listen((snap) {
+      if (!snap.exists || !mounted) return;
+      final dados = snap.data() as Map<String, dynamic>;
+      final nivel = nivelAcessoLojista(dados);
+      if (nivel != _nivelAcesso) {
+        setState(() => _nivelAcesso = nivel);
+      }
+    });
   }
 
   /// Foto + nome do cliente denormalizados no pedido (`cliente_nome` e
@@ -68,42 +220,127 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
     final foto = (pedido['cliente_foto_perfil'] ?? '').toString().trim();
     final nome = nomeGravado.isNotEmpty ? nomeGravado : 'Cliente';
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: Colors.grey.shade300,
-            backgroundImage: foto.isNotEmpty ? NetworkImage(foto) : null,
-            child: foto.isEmpty
-                ? const Icon(Icons.person, color: diPertinRoxo, size: 26)
+    return Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                diPertinRoxo.withValues(alpha: 0.14),
+                diPertinLaranja.withValues(alpha: 0.10),
+              ],
+            ),
+            border: Border.all(color: _bordaSuave),
+            image: foto.isNotEmpty
+                ? DecorationImage(
+                    image: NetworkImage(foto),
+                    fit: BoxFit.cover,
+                  )
                 : null,
           ),
-          const SizedBox(width: 12),
+          alignment: Alignment.center,
+          child: foto.isEmpty
+              ? const Icon(Icons.person_rounded, color: diPertinRoxo, size: 22)
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'CLIENTE',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: _tintaSuave,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                nome,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  color: _tintaForte,
+                  letterSpacing: -0.2,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _pillEntrega(bool isRetirada, Map<String, dynamic> pedido) {
+    final Color cor = isRetirada ? diPertinLaranja : diPertinRoxo;
+    final String texto = isRetirada
+        ? 'Retirada no balcão'
+        : 'Entrega: ${pedido['endereco_entrega']}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: cor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cor.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isRetirada
+                ? Icons.storefront_rounded
+                : Icons.two_wheeler_rounded,
+            color: cor,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Cliente',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                    letterSpacing: 0.3,
-                  ),
-                ),
-                Text(
-                  nome,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+            child: Text(
+              texto,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: cor,
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chipStatusPedido(String status, bool isRetirada) {
+    final paleta = _paletaStatus(status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: paleta.fundo,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: paleta.borda),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_iconePorStatus(status), size: 14, color: paleta.principal),
+          const SizedBox(width: 6),
+          Text(
+            _rotuloStatusLojista(status, isRetirada),
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 11.5,
+              color: paleta.principal,
+              letterSpacing: 0.1,
             ),
           ),
         ],
@@ -520,33 +757,73 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: diPertinRoxo.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: diPertinRoxo.withValues(alpha: 0.35)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            diPertinRoxo.withValues(alpha: 0.08),
+            diPertinRoxo.withValues(alpha: 0.04),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: diPertinRoxo.withValues(alpha: 0.22)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Entregador parceiro',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: diPertinRoxo,
-              fontSize: 13,
-            ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: diPertinRoxo,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'ENTREGADOR PARCEIRO',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    fontSize: 9.5,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.grey.shade300,
-                backgroundImage: foto.isNotEmpty ? NetworkImage(foto) : null,
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  border: Border.all(
+                    color: diPertinRoxo.withValues(alpha: 0.3),
+                    width: 2,
+                  ),
+                  image: foto.isNotEmpty
+                      ? DecorationImage(
+                          image: NetworkImage(foto),
+                          fit: BoxFit.cover,
+                        )
+                      : null,
+                ),
+                alignment: Alignment.center,
                 child: foto.isEmpty
-                    ? const Icon(Icons.delivery_dining, color: diPertinRoxo)
+                    ? const Icon(
+                        Icons.delivery_dining_rounded,
+                        color: diPertinRoxo,
+                        size: 28,
+                      )
                     : null,
               ),
               const SizedBox(width: 12),
@@ -557,17 +834,53 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
                     Text(
                       nome,
                       style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15.5,
+                        color: _tintaForte,
+                        letterSpacing: -0.2,
                       ),
                     ),
-                    if (tel.isNotEmpty)
-                      Text('Tel. $tel', style: const TextStyle(fontSize: 13)),
-                    if (veiculo.isNotEmpty)
-                      Text(
-                        'Veículo: $veiculo',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    if (tel.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.phone_rounded,
+                            size: 13,
+                            color: _tintaMedia,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            tel,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              color: _tintaMedia,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
+                    ],
+                    if (veiculo.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.two_wheeler_rounded,
+                            size: 13,
+                            color: _tintaMedia,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            veiculo,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              color: _tintaMedia,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -601,44 +914,82 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
       default:
         linha = 'Cancelamento solicitado pelo cliente.';
     }
+    return _blocoAviso(
+      cor: _vermelhoPerigo,
+      fundo: const Color(0xFFFFF1F2),
+      borda: const Color(0xFFFBD5D8),
+      icone: Icons.info_outline_rounded,
+      titulo: 'Cancelado pelo cliente',
+      mensagem: linha,
+    );
+  }
+
+  /// Bloco de aviso refinado — usa paleta de tinta consistente (não shade50/400 cru).
+  Widget _blocoAviso({
+    required Color cor,
+    required Color fundo,
+    required Color borda,
+    required IconData icone,
+    String? titulo,
+    required String mensagem,
+    Widget? acaoInferior,
+  }) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.red.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.red.shade200),
+        color: fundo,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borda),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.info_outline, color: Colors.red.shade800, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Cancelado pelo cliente',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: Colors.red.shade900,
-                    fontSize: 13,
-                  ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: cor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  linha,
-                  style: TextStyle(
-                    color: Colors.grey.shade900,
-                    fontSize: 13,
-                    height: 1.35,
-                  ),
+                child: Icon(icone, color: cor, size: 16),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (titulo != null) ...[
+                      Text(
+                        titulo,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: cor,
+                          fontSize: 13,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                    ],
+                    Text(
+                      mensagem,
+                      style: const TextStyle(
+                        color: _tintaForte,
+                        fontSize: 12.5,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          if (acaoInferior != null) ...[
+            const SizedBox(height: 12),
+            acaoInferior,
+          ],
         ],
       ),
     );
@@ -672,91 +1023,6 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
     }
   }
 
-  Future<void> _confirmarRetiradaComEstorno(
-    String pedidoId,
-    String clienteId,
-    double taxaEntrega,
-  ) async {
-    final bool confirmacao =
-        await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(15),
-            ),
-            title: const Text(
-              'Confirmar retirada?',
-              style: TextStyle(color: diPertinLaranja),
-            ),
-            content: Text(
-              'O cliente decidiu vir buscar o pedido?\n\n'
-              'Ao confirmar, o valor de R\$ ${taxaEntrega.toStringAsFixed(2)} referente à entrega '
-              'será estornado e devolvido para a carteira do cliente no aplicativo.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text(
-                  'Cancelar',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: diPertinLaranja,
-                ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text(
-                  'Sim, estornar frete',
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-
-    if (!confirmacao) return;
-
-    // Fase 3G.3 — estorno via callable (Admin SDK). Antes o lojista fazia
-    // `update users/{cliente_id}.saldo` direto, o que forçava a rule de
-    // `users` a permitir escritas cruzadas. Agora a função valida que o
-    // caller é a loja do pedido antes de creditar o saldo.
-    try {
-      final callable = appFirebaseFunctions.httpsCallable(
-        'lojistaConfirmarRetiradaNaLojaComEstorno',
-      );
-      await callable.call(<String, dynamic>{'pedidoId': pedidoId});
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Pedido finalizado e frete devolvido ao cliente.'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } on FirebaseFunctionsException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message ?? 'Erro ao estornar o frete.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao estornar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   String _formatarData(Timestamp? timestamp) {
     if (timestamp == null) return 'Agora';
     final DateTime data = timestamp.toDate();
@@ -784,49 +1050,53 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
-            return Scaffold(
-              backgroundColor: Colors.grey[100],
-              appBar: AppBar(
-                title: const Text(
-                  'Gestão de pedidos',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                backgroundColor: diPertinLaranja,
-                iconTheme: const IconThemeData(color: Colors.white),
-              ),
+            return _scaffoldBase(
               body: const Center(
-                child: CircularProgressIndicator(color: diPertinLaranja),
+                child: CircularProgressIndicator(color: diPertinRoxo),
               ),
+              qtdNovos: 0,
+              qtdAndamento: 0,
             );
           }
 
           if (snapshot.hasError) {
-            return Scaffold(
-              backgroundColor: Colors.grey[100],
-              appBar: AppBar(
-                title: const Text(
-                  'Gestão de pedidos',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                backgroundColor: diPertinLaranja,
-                iconTheme: const IconThemeData(color: Colors.white),
-              ),
+            return _scaffoldBase(
               body: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Text(
-                    'Não foi possível carregar os pedidos.\n${snapshot.error}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.red),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.cloud_off_rounded,
+                        size: 54,
+                        color: _tintaSuave,
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Não foi possível carregar os pedidos',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: _tintaForte,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${snapshot.error}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: _tintaMedia,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
+              qtdNovos: 0,
+              qtdAndamento: 0,
             );
           }
 
@@ -870,145 +1140,156 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
               )
               .toList();
 
-          return Scaffold(
-            backgroundColor: Colors.grey[100],
-            appBar: AppBar(
-              title: const Text(
-                'Gestão de pedidos',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
+          // Único TabBarView — `_buildListaPedidos` já renderiza o estado
+          // vazio por aba, então não precisa alternar o widget-raiz. Isso
+          // evita o TabController perder sincronia no rebuild que acontece
+          // assim que o Firestore passa de 0 → 1 pedido (momento em que o
+          // widget-raiz trocava e a aba "Novos" ficava em branco).
+          return _scaffoldBase(
+            qtdNovos: qtdNovos,
+            qtdAndamento: qtdAndamento,
+            body: TabBarView(
+              children: [
+                _buildListaPedidos(
+                  novos,
+                  'Nenhum pedido novo no momento.',
+                  iconeVazio: Icons.notifications_none_rounded,
                 ),
-              ),
-              backgroundColor: diPertinLaranja,
-              iconTheme: const IconThemeData(color: Colors.white),
-              bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(52),
-                child: TabBar(
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.white70,
-                  indicatorColor: Colors.white,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  tabs: [
-                    Tab(
-                      child: _abaComContador(
-                        icone: Icons.notifications_active,
-                        titulo: 'Novos',
-                        quantidade: qtdNovos,
-                        destaque: qtdNovos > 0,
-                      ),
-                    ),
-                    Tab(
-                      child: _abaComContador(
-                        icone: Icons.soup_kitchen,
-                        titulo: 'Andamento',
-                        quantidade: qtdAndamento,
-                        destaque: false,
-                      ),
-                    ),
-                    const Tab(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.history, size: 20),
-                          SizedBox(width: 6),
-                          Text('Histórico'),
-                        ],
-                      ),
-                    ),
-                  ],
+                _buildListaPedidos(
+                  andamento,
+                  'Nenhum pedido em andamento.',
+                  iconeVazio: Icons.soup_kitchen_rounded,
                 ),
-              ),
+                _buildListaPedidos(
+                  historico,
+                  'Histórico vazio.',
+                  iconeVazio: Icons.history_rounded,
+                ),
+              ],
             ),
-            body: todosPedidos.isEmpty
-                ? TabBarView(
-                    children: [
-                      _buildEstadoVazioGeral(),
-                      _buildEstadoVazioGeral(),
-                      _buildEstadoVazioGeral(),
-                    ],
-                  )
-                : TabBarView(
-                    children: [
-                      _buildListaPedidos(
-                        novos,
-                        'Nenhum pedido novo no momento.',
-                      ),
-                      _buildListaPedidos(
-                        andamento,
-                        'Nenhum pedido em andamento.',
-                      ),
-                      _buildListaPedidos(historico, 'Histórico vazio.'),
-                    ],
-                  ),
           );
         },
       ),
     );
   }
 
-  Widget _abaComContador({
-    required IconData icone,
-    required String titulo,
-    required int quantidade,
-    required bool destaque,
+  Widget _scaffoldBase({
+    required Widget body,
+    required int qtdNovos,
+    required int qtdAndamento,
   }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icone, size: 20),
-        const SizedBox(width: 6),
-        Text(titulo),
-        if (quantidade > 0) ...[
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: destaque
-                  ? Colors.white
-                  : Colors.white.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              quantidade > 99 ? '99+' : '$quantidade',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: destaque ? diPertinLaranja : Colors.white,
-              ),
+    return Scaffold(
+      backgroundColor: _fundoTela,
+      appBar: AppBar(
+        title: const Text(
+          'Gestão de pedidos',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.2,
+            fontSize: 17,
+          ),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_diPertinRoxoEscuro, diPertinRoxo],
             ),
           ),
-        ],
-      ],
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(66),
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [_diPertinRoxoEscuro, diPertinRoxo],
+              ),
+            ),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            child: _TabBarPremium(
+              tabs: [
+                _AbaPremiumConfig(
+                  icone: Icons.notifications_active_rounded,
+                  titulo: 'Novos',
+                  quantidade: qtdNovos,
+                  destaque: qtdNovos > 0,
+                ),
+                _AbaPremiumConfig(
+                  icone: Icons.soup_kitchen_rounded,
+                  titulo: 'Andamento',
+                  quantidade: qtdAndamento,
+                ),
+                const _AbaPremiumConfig(
+                  icone: Icons.history_rounded,
+                  titulo: 'Histórico',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      // O Scaffold mede o AppBar automaticamente; não precisamos de
+      // `extendBodyBehindAppBar` + Padding manual — essa combinação quando
+      // junta com TabBarView + `MediaQuery.of(context)` mudando (teclado,
+      // rotação) às vezes fica com altura zero e esconde a lista toda.
+      body: body,
     );
   }
 
-  Widget _buildEstadoVazioGeral() {
+  Widget _buildEstadoVazioGeral({
+    required String titulo,
+    required String subtitulo,
+    required IconData icone,
+  }) {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.receipt_long, size: 72, color: Colors.grey[400]),
-            const SizedBox(height: 16),
+            Container(
+              width: 92,
+              height: 92,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    diPertinRoxo.withValues(alpha: 0.10),
+                    diPertinLaranja.withValues(alpha: 0.08),
+                  ],
+                ),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Icon(icone, size: 40, color: diPertinRoxo),
+            ),
+            const SizedBox(height: 18),
             Text(
-              'Nenhum pedido ainda',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.grey[800],
+              titulo,
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: _tintaForte,
+                letterSpacing: -0.3,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Quando chegar um pedido novo, ele aparece na aba Novos e você ouve um aviso sonoro.',
+              subtitulo,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-                height: 1.4,
+              style: const TextStyle(
+                fontSize: 13.5,
+                color: _tintaMedia,
+                height: 1.5,
               ),
             ),
           ],
@@ -1019,801 +1300,1044 @@ class _LojistaPedidosScreenState extends State<LojistaPedidosScreen> {
 
   Widget _buildListaPedidos(
     List<QueryDocumentSnapshot> pedidos,
-    String mensagemVazia,
-  ) {
+    String mensagemVazia, {
+    required IconData iconeVazio,
+  }) {
     if (pedidos.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            mensagemVazia,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey[600], fontSize: 15),
-          ),
-        ),
+      return _buildEstadoVazioGeral(
+        titulo: mensagemVazia,
+        subtitulo: 'Quando houver algo nesta aba, o card aparece aqui.',
+        icone: iconeVazio,
       );
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.all(15),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       itemCount: pedidos.length,
       itemBuilder: (context, index) {
-        final pedido = pedidos[index].data() as Map<String, dynamic>;
-        final String id = pedidos[index].id;
-        final String status = pedido['status'] ?? 'pendente';
-        final bool isRetirada = pedido['tipo_entrega'] == 'retirada';
-        final List<dynamic> itens = pedido['itens'] ?? [];
-        final String clienteId = pedido['cliente_id'] ?? '';
-        final Widget? painelMotivoCliente = _painelMotivoCancelamentoCliente(
-          pedido,
-        );
+        try {
+          final rawData = pedidos[index].data();
+          if (rawData is! Map) {
+            return const SizedBox.shrink();
+          }
+          final pedido = Map<String, dynamic>.from(rawData);
+          final String id = pedidos[index].id;
+          final String status = (pedido['status'] ?? 'pendente').toString();
+          final bool isRetirada = pedido['tipo_entrega'] == 'retirada';
 
-        return Card(
-          elevation: 2,
-          margin: const EdgeInsets.only(bottom: 15),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _cardPedido(
+              pedido: pedido,
+              id: id,
+              status: status,
+              isRetirada: isRetirada,
+            ),
+          );
+        } catch (e, st) {
+          debugPrint('Erro ao renderizar pedido #$index: $e\n$st');
+          return Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.red.shade200),
+            ),
+            child: Text(
+              'Erro ao exibir pedido: $e',
+              style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  Widget _cardPedido({
+    required Map<String, dynamic> pedido,
+    required String id,
+    required String status,
+    required bool isRetirada,
+  }) {
+    final paleta = _paletaStatus(status);
+    final List<dynamic> itens = pedido['itens'] ?? [];
+    final Widget? painelMotivoCliente = _painelMotivoCancelamentoCliente(
+      pedido,
+    );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _bordaSuave),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1A1530).withValues(alpha: 0.04),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(15),
-            child: Column(
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      // IntrinsicHeight é necessário para que `CrossAxisAlignment.stretch`
+      // consiga esticar a faixa lateral colorida do mesmo tamanho do card
+      // quando o pai é um ListView (altura 0..∞). Sem ele, o Row falha com
+      // "RenderBox was not laid out" e a lista inteira fica invisível.
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Faixa lateral colorida por status — identificação instantânea.
+            Container(width: 4, color: paleta.principal),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _headerPedido(id, pedido, status, isRetirada),
+                  const SizedBox(height: 14),
+                  _cabecalhoClientePedido(pedido),
+                  const SizedBox(height: 12),
+                  _pillEntrega(isRetirada, pedido),
+                  const SizedBox(height: 14),
+                  _listaItensRefinada(itens),
+                  const SizedBox(height: 14),
+                  if (_podeVerFinanceiro) ...[
+                    _caixaFinanceira(pedido, isRetirada),
+                    const SizedBox(height: 14),
+                  ] else
+                    _avisoFinanceiroOculto(isRetirada),
+                  if (painelMotivoCliente != null) ...[
+                    painelMotivoCliente,
+                    const SizedBox(height: 12),
+                  ],
+                  ChatPedidoBotao(
+                    pedidoId: id,
+                    lojaId: _uid,
+                    lojaNome: (pedido['loja_nome'] ?? '').toString(),
+                    tituloOverride: () {
+                      final n =
+                          (pedido['cliente_nome'] ?? '').toString().trim();
+                      return n.isNotEmpty ? n : 'Cliente';
+                    }(),
+                    subtituloOverride: 'Pedido ${_rotuloPedido(id)}',
+                    rotuloAtivo: 'Chat com o cliente',
+                    rotuloEncerrado: 'Ver conversa do pedido',
+                    encerrado: status == PedidoStatus.entregue ||
+                        status == PedidoStatus.cancelado,
+                  ),
+                  const SizedBox(height: 12),
+                  if (pedido['entregador_id'] != null &&
+                      pedido['entregador_id'].toString().isNotEmpty &&
+                      !isRetirada) ...[
+                    _painelDadosEntregador(pedido),
+                    const SizedBox(height: 12),
+                  ],
+                  _acoesPorStatus(id, status, isRetirada, pedido),
+                ],
+              ),
+            ),
+          ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _headerPedido(
+    String id,
+    Map<String, dynamic> pedido,
+    String status,
+    bool isRetirada,
+  ) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Pedido ${_rotuloPedido(id)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: _tintaForte,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 4,
+                    height: 4,
+                    decoration: const BoxDecoration(
+                      color: _tintaSuave,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      _tempoRelativo(pedido['data_pedido']),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _tintaMedia,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _formatarData(pedido['data_pedido']),
+                style: const TextStyle(
+                  color: _tintaSuave,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        _chipStatusPedido(status, isRetirada),
+      ],
+    );
+  }
+
+  Widget _listaItensRefinada(List<dynamic> itens) {
+    if (itens.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'ITENS',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            color: _tintaSuave,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 6),
+        ...List.generate(itens.length, (i) {
+          final item = itens[i];
+          if (item is! Map) return const SizedBox.shrink();
+          final map = Map<String, dynamic>.from(item);
+          final nome = map['nome']?.toString() ?? '';
+          final qtd = map['quantidade'] ?? 1;
+          final preco = _precoItem(map['preco']);
+          return Padding(
+            padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Pedido ${_rotuloPedido(id)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(
-                      _formatarData(pedido['data_pedido']),
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  ],
-                ),
-                const Divider(),
-                _cabecalhoClientePedido(pedido),
-                Row(
-                  children: [
-                    Icon(
-                      isRetirada ? Icons.storefront : Icons.two_wheeler,
-                      color: isRetirada ? diPertinLaranja : diPertinRoxo,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        isRetirada
-                            ? 'Retirada no balcão'
-                            : 'Entrega: ${pedido['endereco_entrega']}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: isRetirada ? diPertinLaranja : diPertinRoxo,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                ...itens.map((item) {
-                  if (item is! Map) {
-                    return const SizedBox.shrink();
-                  }
-                  final map = Map<String, dynamic>.from(item);
-                  final nome = map['nome']?.toString() ?? '';
-                  final qtd = map['quantidade'] ?? 1;
-                  final preco = _precoItem(map['preco']);
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Text(
-                          '${qtd}x ',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Expanded(child: Text(nome)),
-                        Text('R\$ ${preco.toStringAsFixed(2)}'),
-                      ],
-                    ),
-                  );
-                }),
-                const Divider(),
-                Builder(
-                  builder: (context) {
-                    final double subtotal = (pedido['subtotal'] ?? 0.0)
-                        .toDouble();
-                    final String formaPagamentoBruto =
-                        (pedido['forma_pagamento'] ??
-                                pedido['metodo_pagamento'] ??
-                                pedido['pagamento_metodo'] ??
-                                pedido['formaPagamento'] ??
-                                '')
-                            .toString()
-                            .trim();
-                    final String formaPagamentoNormalizada = formaPagamentoBruto
-                        .toLowerCase();
-                    final String formaPagamentoExibicao =
-                        formaPagamentoNormalizada == 'dinheiro'
-                        ? 'Dinheiro'
-                        : formaPagamentoNormalizada == 'pix'
-                        ? 'PIX'
-                        : formaPagamentoBruto;
-                    // Modelo iFood: o entregador é o responsável pelo dinheiro
-                    // e pelo troco. O lojista não vê mais "Troco para R$ X" —
-                    // apenas o aviso de que o cliente vai pagar em dinheiro
-                    // direto ao entregador. Isso evita confusão com o líquido
-                    // que o lojista realmente recebe.
-                    final double taxaPlataforma =
-                        (pedido['taxa_plataforma'] ?? 0.0).toDouble();
-                    final double? liquidoSrv =
-                        pedido['valor_liquido_lojista'] != null
-                        ? (pedido['valor_liquido_lojista'] as num).toDouble()
-                        : null;
-                    final double seuRecebimento = liquidoSrv ?? subtotal;
-
-                    return Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              isRetirada ? 'Modo: retirada' : 'Modo: entrega',
-                              style: const TextStyle(
-                                color: Colors.grey,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Text(
-                              'Produtos: R\$ ${subtotal.toStringAsFixed(2)}',
-                              style: const TextStyle(fontSize: 14),
-                            ),
-                          ],
-                        ),
-                        if (formaPagamentoExibicao.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Pagamento:',
-                                  style: TextStyle(
-                                    color: Colors.black54,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                Text(
-                                  formaPagamentoExibicao,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        if (formaPagamentoNormalizada == 'dinheiro')
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: Colors.amber.withValues(alpha: 0.5),
-                                ),
-                              ),
-                              child: const Row(
-                                children: [
-                                  Icon(
-                                    Icons.payments_outlined,
-                                    color: Colors.orange,
-                                    size: 18,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'Cliente vai pagar em dinheiro ao entregador. Você não precisa preparar troco — quem leva o dinheiro e devolve o troco é o entregador.',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.black87,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        if (taxaPlataforma > 0)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Taxa da plataforma:',
-                                  style: TextStyle(
-                                    color: Colors.deepPurple,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                Text(
-                                  'R\$ ${taxaPlataforma.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: Colors.deepPurple,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Seu recebimento (líquido):',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green,
-                              ),
-                            ),
-                            Text(
-                              'R\$ ${seuRecebimento.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                                color: Colors.green,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Chip(
-                    label: Text(
-                      _rotuloStatusLojista(status, isRetirada),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
-                      ),
-                    ),
-                    backgroundColor: diPertinLaranja.withValues(alpha: 0.2),
-                    side: BorderSide(
-                      color: diPertinLaranja.withValues(alpha: 0.5),
+                Container(
+                  width: 28,
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _fundoTela,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '${qtd}x',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11.5,
+                      color: _tintaForte,
+                      fontFeatures: _numerosTabulares,
                     ),
                   ),
                 ),
-                if (painelMotivoCliente != null) ...[
-                  const SizedBox(height: 10),
-                  painelMotivoCliente,
-                ],
-                const SizedBox(height: 12),
-
-                // Chat com o cliente (ou histórico da conversa quando o
-                // pedido está encerrado). Fica sempre visível para facilitar
-                // o acesso durante o preparo/entrega e permitir revisita
-                // pós-entrega.
-                ChatPedidoBotao(
-                  pedidoId: id,
-                  lojaId: _uid,
-                  lojaNome: (pedido['loja_nome'] ?? '').toString(),
-                  tituloOverride: () {
-                    final n = (pedido['cliente_nome'] ?? '').toString().trim();
-                    return n.isNotEmpty ? n : 'Cliente';
-                  }(),
-                  subtituloOverride: 'Pedido ${_rotuloPedido(id)}',
-                  rotuloAtivo: 'Chat com o cliente',
-                  rotuloEncerrado: 'Ver conversa do pedido',
-                  encerrado: status == PedidoStatus.entregue ||
-                      status == PedidoStatus.cancelado,
-                ),
-                const SizedBox(height: 12),
-
-                if (pedido['entregador_id'] != null &&
-                    pedido['entregador_id'].toString().isNotEmpty &&
-                    !isRetirada)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _painelDadosEntregador(pedido),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    nome,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      color: _tintaForte,
+                      height: 1.35,
+                    ),
                   ),
-
-                if (status == PedidoStatus.pendente)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red,
-                            side: const BorderSide(color: Colors.red),
-                          ),
-                          onPressed: () => _atualizarStatusPedido(
-                            id,
-                            PedidoStatus.cancelado,
-                          ),
-                          child: const Text('Recusar'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                          ),
-                          onPressed: () =>
-                              _atualizarStatusPedido(id, PedidoStatus.aceito),
-                          child: const Text(
-                            'Aceitar pedido',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else if (status == PedidoStatus.aceito)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: diPertinLaranja,
-                      ),
-                      onPressed: () =>
-                          _atualizarStatusPedido(id, PedidoStatus.emPreparo),
-                      child: const Text(
-                        'Iniciar preparo',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  )
-                else if (status == PedidoStatus.emPreparo)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (!isRetirada &&
-                          pedido['despacho_auto_encerrada_sem_entregador'] ==
-                              true) ...[
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          margin: const EdgeInsets.only(bottom: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.amber.shade400),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                Icons.info_outline,
-                                color: Colors.amber.shade900,
-                                size: 22,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  (pedido['despacho_msg_busca_entregador']
-                                              ?.toString() ??
-                                          '')
-                                      .trim()
-                                      .isNotEmpty
-                                      ? pedido['despacho_msg_busca_entregador']
-                                          .toString()
-                                      : 'A busca por entregador encerrou automaticamente '
-                                          'após várias tentativas. Toque em «Solicitar entregador» '
-                                          'para tentar de novo.',
-                                  style: TextStyle(
-                                    color: Colors.grey.shade900,
-                                    fontSize: 13,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: diPertinLaranja,
-                          ),
-                          onPressed: isRetirada
-                              ? () => _atualizarStatusPedido(
-                                    id,
-                                    PedidoStatus.pronto,
-                                  )
-                              : _solicitandoEntregadorEmProgresso.contains(id)
-                              ? null
-                              : () => _solicitarEntregador(id),
-                          child: Text(
-                            isRetirada
-                                ? 'Pronto para retirada'
-                                : _solicitandoEntregadorEmProgresso.contains(id)
-                                ? 'Solicitando entregador...'
-                                : 'Solicitar entregador',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else if (status == PedidoStatus.aguardandoEntregador)
-                  pedido['despacho_aguarda_decisao_lojista'] == true
-                      ? Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.amber.shade400),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(
-                                    Icons.pause_circle_outline,
-                                    color: Colors.amber.shade900,
-                                    size: 26,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      (pedido['despacho_msg_busca_entregador']
-                                                  ?.toString() ??
-                                              '')
-                                          .trim()
-                                          .isNotEmpty
-                                          ? pedido['despacho_msg_busca_entregador']
-                                              .toString()
-                                          : 'Ainda não encontramos um entregador após 5 rodadas '
-                                              '(3 km e 5 km). Você pode cancelar a chamada ou '
-                                              'continuar buscando por mais 5 rodadas.',
-                                      style: TextStyle(
-                                        color: Colors.grey.shade900,
-                                        fontSize: 13,
-                                        height: 1.35,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: _continuarBuscaEntregadorEmProgresso
-                                          ? null
-                                          : () => _continuarBuscaEntregadoresCallable(
-                                                id,
-                                              ),
-                                      child: const Text('Continuar buscando'),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: FilledButton(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.red.shade700,
-                                      ),
-                                      onPressed:
-                                          (_abrindoConfirmacaoCancelarChamada
-                                                  .contains(id) ||
-                                              _cancelandoChamadaEmProgresso
-                                                  .contains(id))
-                                          ? null
-                                          : () =>
-                                                _cancelarChamadaEntregador(id),
-                                      child: Text(
-                                        _cancelandoChamadaEmProgresso
-                                                .contains(id)
-                                            ? 'Cancelando...'
-                                            : _abrindoConfirmacaoCancelarChamada
-                                                  .contains(id)
-                                            ? 'Abrindo...'
-                                            : 'Cancelar chamada',
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        )
-                      : Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.blue.shade200),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.radar, color: Colors.blue.shade800),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      pedido['despacho_busca_extensao_usada'] ==
-                                              true
-                                          ? 'Buscando de novo: até 5 rodadas '
-                                                '(3 km, depois 5 km). Se ninguém aceitar, '
-                                                'a chamada encerra e o pedido volta para «Em preparo».'
-                                          : 'Buscando entregador: até 5 rodadas começando pelos '
-                                                'mais próximos (até 3 km, depois 5 km). '
-                                                'Se ninguém aceitar, você poderá continuar ou cancelar.',
-                                      style: TextStyle(
-                                        color: Colors.blue.shade900,
-                                        fontSize: 13,
-                                        height: 1.35,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (pedido['despacho_macro_ciclo_atual'] != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Text(
-                                    'Rodada atual: '
-                                    '${pedido['despacho_macro_ciclo_atual']}/'
-                                    '${pedido['despacho_busca_extensao_usada'] == true ? '5 (extra)' : '5'}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.blue.shade800,
-                                    ),
-                                  ),
-                                ),
-                              const SizedBox(height: 12),
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed:
-                                      (_abrindoConfirmacaoCancelarChamada
-                                              .contains(id) ||
-                                          _cancelandoChamadaEmProgresso
-                                              .contains(id))
-                                      ? null
-                                      : () => _cancelarChamadaEntregador(id),
-                                  icon: Icon(
-                                    _cancelandoChamadaEmProgresso.contains(id)
-                                        ? Icons.hourglass_top
-                                        : Icons.close,
-                                    size: 20,
-                                  ),
-                                  label: Text(
-                                    _cancelandoChamadaEmProgresso.contains(id)
-                                        ? 'Cancelando...'
-                                        : _abrindoConfirmacaoCancelarChamada
-                                              .contains(id)
-                                        ? 'Abrindo...'
-                                        : 'Cancelar chamada',
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.blue.shade900,
-                                    side: BorderSide(color: Colors.blue.shade400),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed:
-                                      (_abrindoConfirmacaoChamarDeNovo
-                                              .contains(id) ||
-                                          _chamandoDeNovoEmProgresso.contains(
-                                            id,
-                                          ))
-                                      ? null
-                                      : () => _chamarEntregadorNovamente(id),
-                                  icon: Icon(
-                                    _chamandoDeNovoEmProgresso.contains(id) ||
-                                            _abrindoConfirmacaoChamarDeNovo
-                                                .contains(id)
-                                        ? Icons.hourglass_top
-                                        : Icons.refresh,
-                                    size: 20,
-                                  ),
-                                  label: Text(
-                                    _chamandoDeNovoEmProgresso.contains(id)
-                                        ? 'Reiniciando busca...'
-                                        : _abrindoConfirmacaoChamarDeNovo
-                                              .contains(id)
-                                        ? 'Abrindo...'
-                                        : 'Chamar de novo',
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: diPertinLaranja,
-                                    side: BorderSide(
-                                      color: diPertinLaranja.withValues(
-                                        alpha: 0.8,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                else if (isRetirada && status == PedidoStatus.pronto)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                      ),
-                      onPressed: () =>
-                          _atualizarStatusPedido(id, PedidoStatus.entregue),
-                      child: const Text(
-                        'Confirmar retirada no balcão',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  )
-                else if (!isRetirada &&
-                    (status == PedidoStatus.aCaminho ||
-                        status == PedidoStatus.emRota ||
-                        status == PedidoStatus.saiuEntrega ||
-                        status == PedidoStatus.entregadorIndoLoja) &&
-                    (pedido['entregador_id'] == null ||
-                        pedido['entregador_id'].toString().isEmpty))
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.amber[50],
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.amber),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Aguardando entregador aceitar (fluxo legado ou sem GPS na loja).',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Se você mesmo entregar com motoboy da loja, use o token abaixo.',
-                          style: TextStyle(fontSize: 11, color: Colors.grey),
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Digite o token do cliente',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                            fillColor: Colors.white,
-                            filled: true,
-                          ),
-                          textCapitalization: TextCapitalization.characters,
-                          keyboardType: TextInputType.text,
-                          onSubmitted: (value) async {
-                            String tokenReal =
-                                pedido['token_entrega']?.toString() ?? '';
-                            if (tokenReal.isEmpty && id.length >= 6) {
-                              tokenReal = id
-                                  .substring(id.length - 6)
-                                  .toUpperCase();
-                            }
-                            if (value.trim().toUpperCase() ==
-                                tokenReal.toUpperCase()) {
-                              _atualizarStatusPedido(id, PedidoStatus.entregue);
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Token incorreto.'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  )
-                else if (!isRetirada &&
-                    (status == PedidoStatus.aCaminho ||
-                        status == PedidoStatus.emRota ||
-                        status == PedidoStatus.saiuEntrega ||
-                        status == PedidoStatus.entregadorIndoLoja) &&
-                    pedido['entregador_id'] != null &&
-                    pedido['entregador_id'].toString().isNotEmpty)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 8),
-                        child: Text(
-                          'Acompanhe a entrega pelo app do entregador.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[700],
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          final double taxaEntrega =
-                              (pedido['taxa_entrega'] ?? 0.0).toDouble();
-                          _confirmarRetiradaComEstorno(
-                            id,
-                            clienteId,
-                            taxaEntrega,
-                          );
-                        },
-                        icon: const Icon(Icons.person_pin_circle_outlined),
-                        label: const Text(
-                          'Cliente retirou com você no balcão (estornar frete)',
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  Center(
-                    child: Chip(
-                      label: Text(
-                        status.toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      backgroundColor: status == PedidoStatus.entregue
-                          ? Colors.green
-                          : Colors.red,
+                ),
+                const SizedBox(width: 10),
+                // Mostra preço do item apenas para quem pode ver financeiro
+                if (_podeVerFinanceiro)
+                  Text(
+                    'R\$ ${preco.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _tintaMedia,
+                      fontFeatures: _numerosTabulares,
                     ),
                   ),
               ],
             ),
+          );
+        }),
+      ],
+    );
+  }
+
+  /// Caixa financeira premium (Fase 3) — visível apenas para dono + colaborador III.
+  Widget _caixaFinanceira(Map<String, dynamic> pedido, bool isRetirada) {
+    final double subtotal = (pedido['subtotal'] ?? 0.0).toDouble();
+    final String formaPagamentoBruto = (pedido['forma_pagamento'] ??
+            pedido['metodo_pagamento'] ??
+            pedido['pagamento_metodo'] ??
+            pedido['formaPagamento'] ??
+            '')
+        .toString()
+        .trim();
+    final String formaPagamentoNormalizada = formaPagamentoBruto.toLowerCase();
+    final String formaPagamentoExibicao = formaPagamentoNormalizada == 'dinheiro'
+        ? 'Dinheiro'
+        : formaPagamentoNormalizada == 'pix'
+            ? 'PIX'
+            : formaPagamentoBruto;
+    final double taxaPlataforma = (pedido['taxa_plataforma'] ?? 0.0).toDouble();
+    final double? liquidoSrv = pedido['valor_liquido_lojista'] != null
+        ? (pedido['valor_liquido_lojista'] as num).toDouble()
+        : null;
+    final double seuRecebimento = liquidoSrv ?? subtotal;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _fundoTela,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _bordaSuave),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.account_balance_wallet_rounded,
+                size: 15,
+                color: _tintaMedia,
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                'RESUMO FINANCEIRO',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: _tintaSuave,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _bordaSuave),
+                ),
+                child: Text(
+                  isRetirada ? 'Retirada' : 'Entrega',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: _tintaMedia,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _linhaFinanceira(
+            rotulo: 'Produtos',
+            valor: 'R\$ ${subtotal.toStringAsFixed(2)}',
+            corRotulo: _tintaMedia,
+            corValor: _tintaForte,
+          ),
+          if (formaPagamentoExibicao.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _linhaFinanceira(
+              rotulo: 'Pagamento',
+              valor: formaPagamentoExibicao,
+              corRotulo: _tintaMedia,
+              corValor: _tintaForte,
+            ),
+          ],
+          if (taxaPlataforma > 0) ...[
+            const SizedBox(height: 6),
+            _linhaFinanceira(
+              rotulo: 'Taxa da plataforma',
+              valor: '- R\$ ${taxaPlataforma.toStringAsFixed(2)}',
+              corRotulo: diPertinRoxo,
+              corValor: diPertinRoxo,
+            ),
+          ],
+          if (formaPagamentoNormalizada == 'dinheiro') ...[
+            const SizedBox(height: 10),
+            _blocoAviso(
+              cor: _ambarAviso,
+              fundo: const Color(0xFFFFF8E1),
+              borda: const Color(0xFFF1D583),
+              icone: Icons.payments_rounded,
+              mensagem:
+                  'Cliente vai pagar em dinheiro ao entregador. Você não precisa preparar troco — quem leva o dinheiro e devolve o troco é o entregador.',
+            ),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            height: 1,
+            color: _bordaSuave,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Expanded(
+                child: Text(
+                  'Você recebe',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: _tintaForte,
+                    fontSize: 13.5,
+                  ),
+                ),
+              ),
+              Text(
+                'R\$ ${seuRecebimento.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 22,
+                  color: _verdeSucesso,
+                  letterSpacing: -0.6,
+                  fontFeatures: _numerosTabulares,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _linhaFinanceira({
+    required String rotulo,
+    required String valor,
+    required Color corRotulo,
+    required Color corValor,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          rotulo,
+          style: TextStyle(
+            color: corRotulo,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Text(
+          valor,
+          style: TextStyle(
+            color: corValor,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            fontFeatures: _numerosTabulares,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Nota discreta para operadores (nível 1-2) que não veem valores financeiros.
+  Widget _avisoFinanceiroOculto(bool isRetirada) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _fundoTela,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _bordaSuave),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.lock_outline_rounded,
+            color: _tintaSuave,
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              isRetirada
+                  ? 'Modo: retirada. Dados financeiros visíveis apenas para o proprietário.'
+                  : 'Modo: entrega. Dados financeiros visíveis apenas para o proprietário.',
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: _tintaMedia,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // =========================================================================
+  //  FASE 4 — AÇÕES POR STATUS (botões padronizados + banners refinados)
+  // =========================================================================
+
+  Widget _acoesPorStatus(
+    String id,
+    String status,
+    bool isRetirada,
+    Map<String, dynamic> pedido,
+  ) {
+    if (status == PedidoStatus.pendente) {
+      return Row(
+        children: [
+          Expanded(
+            child: _botaoSecundario(
+              rotulo: 'Recusar',
+              icone: Icons.close_rounded,
+              corTexto: _vermelhoPerigo,
+              corBorda: _vermelhoPerigo.withValues(alpha: 0.7),
+              onPressed: () =>
+                  _atualizarStatusPedido(id, PedidoStatus.cancelado),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _botaoPrimario(
+              rotulo: 'Aceitar pedido',
+              icone: Icons.check_rounded,
+              cor: _verdeSucesso,
+              onPressed: () =>
+                  _atualizarStatusPedido(id, PedidoStatus.aceito),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (status == PedidoStatus.aceito) {
+      return _botaoPrimario(
+        rotulo: 'Iniciar preparo',
+        icone: Icons.soup_kitchen_rounded,
+        cor: diPertinLaranja,
+        onPressed: () =>
+            _atualizarStatusPedido(id, PedidoStatus.emPreparo),
+      );
+    }
+
+    if (status == PedidoStatus.emPreparo) {
+      final bool encerrouSemEntregador = !isRetirada &&
+          pedido['despacho_auto_encerrada_sem_entregador'] == true;
+      final bool carregando =
+          _solicitandoEntregadorEmProgresso.contains(id);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (encerrouSemEntregador) ...[
+            _blocoAviso(
+              cor: _ambarAviso,
+              fundo: const Color(0xFFFFF8E1),
+              borda: const Color(0xFFF1D583),
+              icone: Icons.info_outline_rounded,
+              titulo: 'Busca encerrada',
+              mensagem: (pedido['despacho_msg_busca_entregador']
+                              ?.toString() ??
+                          '')
+                      .trim()
+                      .isNotEmpty
+                  ? pedido['despacho_msg_busca_entregador'].toString()
+                  : 'A busca por entregador encerrou automaticamente após várias tentativas. Toque em «Solicitar entregador» para tentar de novo.',
+            ),
+            const SizedBox(height: 10),
+          ],
+          _botaoPrimario(
+            rotulo: isRetirada
+                ? 'Pronto para retirada'
+                : carregando
+                    ? 'Solicitando entregador...'
+                    : 'Solicitar entregador',
+            icone: isRetirada
+                ? Icons.storefront_rounded
+                : Icons.two_wheeler_rounded,
+            cor: diPertinLaranja,
+            carregando: !isRetirada && carregando,
+            onPressed: isRetirada
+                ? () => _atualizarStatusPedido(id, PedidoStatus.pronto)
+                : carregando
+                    ? null
+                    : () => _solicitarEntregador(id),
+          ),
+        ],
+      );
+    }
+
+    if (status == PedidoStatus.aguardandoEntregador) {
+      if (pedido['despacho_aguarda_decisao_lojista'] == true) {
+        return _blocoAviso(
+          cor: _ambarAviso,
+          fundo: const Color(0xFFFFF8E1),
+          borda: const Color(0xFFF1D583),
+          icone: Icons.pause_circle_outline_rounded,
+          titulo: 'Decidir o que fazer',
+          mensagem: (pedido['despacho_msg_busca_entregador']?.toString() ??
+                      '')
+                  .trim()
+                  .isNotEmpty
+              ? pedido['despacho_msg_busca_entregador'].toString()
+              : 'Ainda não encontramos um entregador após 5 rodadas (3 km e 5 km). Você pode cancelar a chamada ou continuar buscando por mais 5 rodadas.',
+          acaoInferior: Row(
+            children: [
+              Expanded(
+                child: _botaoSecundario(
+                  rotulo: 'Continuar buscando',
+                  icone: Icons.refresh_rounded,
+                  corTexto: _tintaForte,
+                  corBorda: _bordaSuave,
+                  onPressed: _continuarBuscaEntregadorEmProgresso
+                      ? null
+                      : () => _continuarBuscaEntregadoresCallable(id),
+                  carregando: _continuarBuscaEntregadorEmProgresso,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _botaoPrimario(
+                  rotulo: _cancelandoChamadaEmProgresso.contains(id)
+                      ? 'Cancelando...'
+                      : 'Cancelar chamada',
+                  icone: Icons.close_rounded,
+                  cor: _vermelhoPerigo,
+                  carregando:
+                      _cancelandoChamadaEmProgresso.contains(id),
+                  onPressed:
+                      (_abrindoConfirmacaoCancelarChamada.contains(id) ||
+                              _cancelandoChamadaEmProgresso
+                                  .contains(id))
+                          ? null
+                          : () => _cancelarChamadaEntregador(id),
+                ),
+              ),
+            ],
           ),
         );
-      },
+      }
+
+      final String msgBusca = pedido['despacho_busca_extensao_usada'] == true
+          ? 'Buscando de novo: até 5 rodadas (3 km, depois 5 km). Se ninguém aceitar, a chamada encerra e o pedido volta para «Em preparo».'
+          : 'Buscando entregador: até 5 rodadas começando pelos mais próximos (até 3 km, depois 5 km). Se ninguém aceitar, você poderá continuar ou cancelar.';
+
+      final String? rodada = pedido['despacho_macro_ciclo_atual'] != null
+          ? 'Rodada ${pedido['despacho_macro_ciclo_atual']}/'
+              '${pedido['despacho_busca_extensao_usada'] == true ? '5 (extra)' : '5'}'
+          : null;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _blocoAviso(
+            cor: _azulInfo,
+            fundo: const Color(0xFFEFF5FE),
+            borda: const Color(0xFFC8DAF9),
+            icone: Icons.radar_rounded,
+            titulo: rodada ?? 'Buscando entregador',
+            mensagem: msgBusca,
+          ),
+          const SizedBox(height: 10),
+          _botaoSecundario(
+            rotulo: _cancelandoChamadaEmProgresso.contains(id)
+                ? 'Cancelando...'
+                : 'Cancelar chamada',
+            icone: Icons.close_rounded,
+            corTexto: _azulInfo,
+            corBorda: _azulInfo.withValues(alpha: 0.5),
+            carregando: _cancelandoChamadaEmProgresso.contains(id),
+            onPressed: (_abrindoConfirmacaoCancelarChamada.contains(id) ||
+                    _cancelandoChamadaEmProgresso.contains(id))
+                ? null
+                : () => _cancelarChamadaEntregador(id),
+          ),
+          const SizedBox(height: 8),
+          _botaoSecundario(
+            rotulo: _chamandoDeNovoEmProgresso.contains(id)
+                ? 'Reiniciando busca...'
+                : 'Chamar de novo',
+            icone: Icons.refresh_rounded,
+            corTexto: diPertinLaranja,
+            corBorda: diPertinLaranja.withValues(alpha: 0.7),
+            carregando: _chamandoDeNovoEmProgresso.contains(id),
+            onPressed: (_abrindoConfirmacaoChamarDeNovo.contains(id) ||
+                    _chamandoDeNovoEmProgresso.contains(id))
+                ? null
+                : () => _chamarEntregadorNovamente(id),
+          ),
+        ],
+      );
+    }
+
+    if (isRetirada && status == PedidoStatus.pronto) {
+      return _botaoPrimario(
+        rotulo: 'Confirmar retirada no balcão',
+        icone: Icons.task_alt_rounded,
+        cor: _verdeSucesso,
+        onPressed: () =>
+            _atualizarStatusPedido(id, PedidoStatus.entregue),
+      );
+    }
+
+    final bool emRota = !isRetirada &&
+        (status == PedidoStatus.aCaminho ||
+            status == PedidoStatus.emRota ||
+            status == PedidoStatus.saiuEntrega ||
+            status == PedidoStatus.entregadorIndoLoja);
+
+    if (emRota) {
+      final bool semEntregadorVinculado = pedido['entregador_id'] == null ||
+          pedido['entregador_id'].toString().isEmpty;
+      if (semEntregadorVinculado) {
+        return _blocoTokenEntrega(id, pedido);
+      }
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.info_outline_rounded,
+              size: 14,
+              color: _tintaSuave,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Acompanhe a entrega pelo app do entregador.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _tintaMedia,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Fallback para status terminais: entregue/cancelado/desconhecido.
+    return const SizedBox.shrink();
+  }
+
+  Widget _blocoTokenEntrega(String id, Map<String, dynamic> pedido) {
+    return _blocoAviso(
+      cor: _ambarAviso,
+      fundo: const Color(0xFFFFF8E1),
+      borda: const Color(0xFFF1D583),
+      icone: Icons.vpn_key_rounded,
+      titulo: 'Aguardando entregador aceitar',
+      mensagem:
+          'Se você mesmo entregar com motoboy da loja, digite o token que o cliente informar:',
+      acaoInferior: TextField(
+        decoration: InputDecoration(
+          hintText: 'Token do cliente (6 caracteres)',
+          hintStyle: const TextStyle(
+            color: _tintaSuave,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+          isDense: true,
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: _bordaSuave),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: _bordaSuave),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: diPertinRoxo, width: 1.5),
+          ),
+          prefixIcon: const Icon(Icons.key_rounded, color: _tintaMedia, size: 20),
+        ),
+        style: const TextStyle(
+          fontFamily: 'monospace',
+          fontWeight: FontWeight.w800,
+          fontSize: 15,
+          letterSpacing: 2,
+          color: _tintaForte,
+        ),
+        textCapitalization: TextCapitalization.characters,
+        keyboardType: TextInputType.text,
+        onSubmitted: (value) async {
+          String tokenReal = pedido['token_entrega']?.toString() ?? '';
+          if (tokenReal.isEmpty && id.length >= 6) {
+            tokenReal = id.substring(id.length - 6).toUpperCase();
+          }
+          if (value.trim().toUpperCase() == tokenReal.toUpperCase()) {
+            _atualizarStatusPedido(id, PedidoStatus.entregue);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Token incorreto.'),
+                backgroundColor: _vermelhoPerigo,
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  // =========================================================================
+  //  BOTÕES PADRONIZADOS — primário (FilledButton) e secundário (OutlinedButton)
+  // =========================================================================
+
+  Widget _botaoPrimario({
+    required String rotulo,
+    required IconData icone,
+    required Color cor,
+    required VoidCallback? onPressed,
+    bool carregando = false,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: FilledButton(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          backgroundColor: cor,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: cor.withValues(alpha: 0.5),
+          disabledForegroundColor: Colors.white.withValues(alpha: 0.85),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (carregando)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  valueColor: AlwaysStoppedAnimation(Colors.white),
+                ),
+              )
+            else
+              Icon(icone, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                rotulo,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _botaoSecundario({
+    required String rotulo,
+    required IconData icone,
+    required Color corTexto,
+    required Color corBorda,
+    required VoidCallback? onPressed,
+    bool carregando = false,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 46,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: corTexto,
+          side: BorderSide(color: corBorda, width: 1.2),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (carregando)
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation(corTexto),
+                ),
+              )
+            else
+              Icon(icone, size: 17, color: corTexto),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                rotulo,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13.5,
+                  color: corTexto,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+//  TabBar premium com indicador pill (fora da classe principal)
+// ===========================================================================
+
+/// Contador compacto para abas: altura fixa evita “cápsula” vertical alta
+/// (comum quando só há um dígito e o [Container] herda altura do [Tab]).
+class _ContadorAbaTab extends StatelessWidget {
+  final int quantidade;
+  final bool destaque;
+
+  const _ContadorAbaTab({
+    required this.quantidade,
+    this.destaque = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final texto = quantidade > 99 ? '99+' : '$quantidade';
+    final largo = texto.length > 1;
+    const altura = 19.0;
+    final minLargura = largo ? 26.0 : altura;
+
+    return Container(
+      height: altura,
+      constraints: BoxConstraints(minWidth: minLargura),
+      alignment: Alignment.center,
+      padding: EdgeInsets.symmetric(horizontal: largo ? 6 : 0),
+      decoration: BoxDecoration(
+        color: destaque
+            ? Colors.white
+            : Colors.white.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(altura / 2),
+      ),
+      child: Text(
+        texto,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: largo ? 9.5 : 10,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+          letterSpacing: -0.3,
+          color: destaque ? diPertinRoxo : Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _AbaPremiumConfig {
+  final IconData icone;
+  final String titulo;
+  final int quantidade;
+  final bool destaque;
+
+  const _AbaPremiumConfig({
+    required this.icone,
+    required this.titulo,
+    this.quantidade = 0,
+    this.destaque = false,
+  });
+}
+
+class _TabBarPremium extends StatelessWidget {
+  final List<_AbaPremiumConfig> tabs;
+  const _TabBarPremium({required this.tabs});
+
+  @override
+  Widget build(BuildContext context) {
+    return TabBar(
+      labelColor: Colors.white,
+      unselectedLabelColor: Colors.white70,
+      indicatorSize: TabBarIndicatorSize.tab,
+      indicator: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Colors.white.withValues(alpha: 0.18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+      ),
+      dividerColor: Colors.transparent,
+      splashBorderRadius: BorderRadius.circular(999),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      tabs: tabs
+          .map(
+            (t) => Tab(
+              height: 40,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Icon(t.icone, size: 17),
+                  const SizedBox(width: 6),
+                  Text(
+                    t.titulo,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      letterSpacing: -0.2,
+                      height: 1.0,
+                    ),
+                  ),
+                  if (t.quantidade > 0) ...[
+                    const SizedBox(width: 5),
+                    _ContadorAbaTab(
+                      quantidade: t.quantidade,
+                      destaque: t.destaque,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 }

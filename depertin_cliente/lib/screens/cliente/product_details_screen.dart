@@ -150,6 +150,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
           widget.produto['loja_id']?.toString() ??
           '',
       lojaNome: widget.produto['loja_nome_vitrine'] ?? 'Loja Parceira',
+      requerVeiculoGrande:
+          widget.produto['requer_veiculo_grande'] == true ||
+          widget.produto['carga_maior'] == true,
     );
 
     cart.addItemWithQuantity(productItem, q);
